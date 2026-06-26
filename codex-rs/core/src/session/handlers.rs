@@ -279,12 +279,26 @@ pub(super) async fn user_input_or_turn_inner(
 pub async fn inter_agent_communication(
     sess: &Arc<Session>,
     sub_id: String,
-    communication: InterAgentCommunication,
+    mut communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
+    let communication_log = communication
+        .agent_communication_metadata
+        .take()
+        .map(|metadata| {
+            let content = crate::agent_communication::communication_content(&communication);
+            (metadata, content.to_string())
+        });
     sess.input_queue
         .enqueue_mailbox_communication(communication)
         .await;
+    if let Some((metadata, content)) = communication_log {
+        crate::agent_communication::emit_agent_communication_enqueued(
+            metadata,
+            sess.thread_id,
+            &content,
+        );
+    }
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
