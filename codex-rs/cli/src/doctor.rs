@@ -1330,6 +1330,7 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
         AuthMode::AgentIdentity => "agent_identity",
         AuthMode::PersonalAccessToken => "personal_access_token",
         AuthMode::BedrockApiKey => "bedrock_api_key",
+        AuthMode::XaiOAuth => "xai_oauth",
     }
 }
 
@@ -1418,6 +1419,19 @@ fn stored_auth_issues(
         AuthMode::BedrockApiKey => {
             if auth.bedrock_api_key.is_none() {
                 issues.push("Bedrock API key auth is missing a Bedrock API key");
+            }
+        }
+        AuthMode::XaiOAuth => {
+            match auth.tokens.as_ref() {
+                Some(tokens) => {
+                    if tokens.access_token.trim().is_empty() {
+                        issues.push("xAI auth is missing an access token");
+                    }
+                    if tokens.refresh_token.trim().is_empty() {
+                        issues.push("xAI auth is missing a refresh token");
+                    }
+                }
+                None => issues.push("xAI auth is missing token data"),
             }
         }
     }
@@ -2469,6 +2483,7 @@ fn auth_mode_name(auth: &CodexAuth) -> &'static str {
         AuthMode::AgentIdentity => "agent_identity",
         AuthMode::PersonalAccessToken => "personal_access_token",
         AuthMode::BedrockApiKey => "bedrock_api_key",
+        AuthMode::XaiOAuth => "xai_oauth",
     }
 }
 
@@ -2601,7 +2616,9 @@ fn provider_auth_reachability_mode_from_auth(
         return ProviderAuthReachabilityMode::Chatgpt;
     }
     match stored_auth.map(stored_auth_mode_value) {
-        Some(AuthMode::ApiKey | AuthMode::BedrockApiKey) => ProviderAuthReachabilityMode::ApiKey,
+        Some(AuthMode::ApiKey | AuthMode::BedrockApiKey | AuthMode::XaiOAuth) => {
+            ProviderAuthReachabilityMode::ApiKey
+        }
         Some(
             AuthMode::Chatgpt
             | AuthMode::ChatgptAuthTokens

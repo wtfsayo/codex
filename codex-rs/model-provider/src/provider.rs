@@ -295,6 +295,8 @@ impl ModelProvider for ConfiguredModelProvider {
                             .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
                             .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
                     }
+                    // xAI OAuth doesn't report a ChatGPT plan; treat as API key style.
+                    CodexAuth::XaiOAuth(_) => Ok(ProviderAccount::ApiKey),
                 })
                 .transpose()?
         } else {

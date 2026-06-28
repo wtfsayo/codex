@@ -27,6 +27,11 @@ pub enum AuthMode {
     #[serde(rename = "bedrockApiKey")]
     #[strum(serialize = "bedrockApiKey")]
     BedrockApiKey,
+    /// xAI (Grok) OAuth managed by Codex (SuperGrok subscription tokens
+    /// persisted and refreshed by Codex against `auth.x.ai`).
+    #[serde(rename = "xaiOAuth")]
+    #[strum(serialize = "xaiOAuth")]
+    XaiOAuth,
 }
 
 impl AuthMode {
@@ -34,7 +39,7 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey | Self::XaiOAuth => false,
         }
     }
 
@@ -45,7 +50,7 @@ impl AuthMode {
             | Self::ChatgptAuthTokens
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::BedrockApiKey | Self::XaiOAuth => false,
         }
     }
 }

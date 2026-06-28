@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod auth_env_telemetry;
 pub mod token_data;
+pub mod xai_oauth;
 
 mod device_code_auth;
 mod outbound_proxy;
@@ -56,3 +57,7 @@ pub use auth_env_telemetry::AuthEnvTelemetry;
 pub use auth_env_telemetry::collect_auth_env_telemetry;
 pub use outbound_proxy::AuthRouteConfig;
 pub use token_data::TokenData;
+pub use xai_oauth::XAI_OAUTH_CLIENT_ID;
+pub use xai_oauth::XaiLoginServer;
+pub use xai_oauth::XaiLoginServerOptions;
+pub use xai_oauth::run_xai_login_server;

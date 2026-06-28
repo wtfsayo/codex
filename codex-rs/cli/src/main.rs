@@ -17,6 +17,7 @@ use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
+use codex_cli::run_login_with_xai;
 use codex_cli::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
@@ -115,6 +116,17 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     interactive: TuiCli,
+
+    /// Use the xAI (Grok / SuperGrok) model provider for this session.
+    /// Shorthand for `-c model_provider="xai"`. Requires `codex login --xai`
+    /// or `XAI_API_KEY` to be set.
+    #[arg(long = "xai", conflicts_with = "oai")]
+    use_xai_provider: bool,
+
+    /// Use the OpenAI model provider for this session (default).
+    /// Shorthand for `-c model_provider="openai"`.
+    #[arg(long = "oai", conflicts_with = "xai")]
+    use_oai_provider: bool,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -463,13 +475,13 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY * codex login --with-api-key`)"
     )]
     with_api_key: bool,
 
     #[arg(
         long = "with-access-token",
-        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)"
+        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN * codex login --with-access-token`)"
     )]
     with_access_token: bool,
 
@@ -485,6 +497,10 @@ struct LoginCommand {
 
     #[arg(long = "device-auth")]
     use_device_code: bool,
+
+    /// Log in with xAI (Grok / SuperGrok) OAuth instead of ChatGPT.
+    #[arg(long = "xai")]
+    use_xai: bool,
 
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
     /// Override the OAuth issuer base URL (advanced)
@@ -970,12 +986,26 @@ async fn cli_main(
         feature_toggles,
         remote,
         mut interactive,
+        use_xai_provider,
+        use_oai_provider,
         subcommand,
     } = MultitoolCli::parse();
 
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+
+    // Fold --xai / --oai into model_provider config overrides so they flow to
+    // all subcommands the same way as `-c model_provider="xai"`.
+    if use_xai_provider {
+        root_config_overrides
+            .raw_overrides
+            .push(r#"model_provider="xai""#.to_string());
+    } else if use_oai_provider {
+        root_config_overrides
+            .raw_overrides
+            .push(r#"model_provider="openai""#.to_string());
+    }
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
     let root_strict_config = interactive.strict_config;
@@ -1365,7 +1395,7 @@ async fn cli_main(
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY * codex login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1374,6 +1404,8 @@ async fn cli_main(
                     } else if login_cli.with_access_token {
                         let access_token = read_access_token_from_stdin();
                         run_login_with_access_token(login_cli.config_overrides, access_token).await;
+                    } else if login_cli.use_xai {
+                        run_login_with_xai(login_cli.config_overrides).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }

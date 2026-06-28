@@ -450,10 +450,18 @@ impl ModelClient {
         self
     }
 
-    fn prompt_cache_key(&self) -> String {
-        self.prompt_cache_key_override
-            .clone()
-            .unwrap_or_else(|| self.state.thread_id.to_string())
+    fn prompt_cache_key(
+        &self,
+        instructions: &str,
+        tools: Option<&[serde_json::Value]>,
+    ) -> String {
+        crate::prompt_cache::resolve_prompt_cache_key(
+            self.state.provider.info(),
+            instructions,
+            tools,
+            &self.state.thread_id.to_string(),
+            self.prompt_cache_key_override.as_deref(),
+        )
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -870,7 +878,7 @@ impl ModelClient {
             &prompt.output_schema,
             prompt.output_schema_strict,
         );
-        let prompt_cache_key = Some(self.prompt_cache_key());
+        let prompt_cache_key = Some(self.prompt_cache_key(&instructions, tools.as_deref()));
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
@@ -1116,6 +1124,13 @@ impl ModelClientSession {
                     headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
                 }
                 add_responses_lite_header(&mut headers, use_responses_lite);
+                if crate::prompt_cache::is_xai_provider(self.client.state.provider.info()) {
+                    if let Ok(value) = HeaderValue::from_str(
+                        &responses_metadata.session_id.to_string(),
+                    ) {
+                        headers.insert("x-grok-conv-id", value);
+                    }
+                }
                 headers
             },
             compression,
@@ -2085,7 +2100,7 @@ impl AuthRequestTelemetryContext {
         let auth_telemetry = auth_header_telemetry(api_auth);
         Self {
             auth_mode: auth_mode.map(|mode| match mode {
-                AuthMode::ApiKey | AuthMode::BedrockApiKey => "ApiKey",
+                AuthMode::ApiKey | AuthMode::BedrockApiKey | AuthMode::XaiOAuth => "ApiKey",
                 AuthMode::Chatgpt
                 | AuthMode::ChatgptAuthTokens
                 | AuthMode::AgentIdentity

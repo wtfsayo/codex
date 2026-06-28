@@ -60,7 +60,8 @@ impl From<AuthMode> for TelemetryAuthMode {
             AuthMode::Chatgpt
             | AuthMode::ChatgptAuthTokens
             | AuthMode::AgentIdentity
-            | AuthMode::PersonalAccessToken => Self::Chatgpt,
+            | AuthMode::PersonalAccessToken
+            | AuthMode::XaiOAuth => Self::Chatgpt,
         }
     }
 }

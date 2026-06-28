@@ -36,6 +36,10 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+
+const XAI_PROVIDER_NAME: &str = "xAI";
+pub const XAI_PROVIDER_ID: &str = "xai";
+pub const XAI_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -392,8 +396,45 @@ impl ModelProviderInfo {
         }
     }
 
+    /// Built-in xAI (Grok) provider using the OpenAI-compatible Responses API
+    /// at `https://api.x.ai/v1`. Auth is supplied via an xAI OAuth access token
+    /// (SuperGrok) stored in `auth.json`, or via `XAI_API_KEY` env var.
+    pub fn create_xai_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: XAI_PROVIDER_NAME.into(),
+            base_url: Some(XAI_DEFAULT_BASE_URL.into()),
+            env_key: Some("XAI_API_KEY".into()),
+            env_key_instructions: Some(
+                "Create an xAI API key at https://console.x.ai and set XAI_API_KEY.".into(),
+            ),
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: Some(
+                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            // xAI does not use the ChatGPT/Codex backend; auth is direct.
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    /// Returns true if this provider entry is the built-in xAI (Grok) provider.
+    pub fn is_xai(&self) -> bool {
+        self.name == XAI_PROVIDER_NAME
     }
 
     pub fn uses_openai_actor_authorization(&self) -> bool {
@@ -432,6 +473,7 @@ pub fn built_in_model_providers(
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
+    let xai_provider = P::create_xai_provider();
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
@@ -440,6 +482,7 @@ pub fn built_in_model_providers(
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
+        (XAI_PROVIDER_ID, xai_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

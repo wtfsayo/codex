@@ -14,11 +14,13 @@ use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::XaiLoginServerOptions;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_login::run_xai_login_server;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
@@ -162,6 +164,49 @@ pub async fn login_with_chatgpt(
     print_login_server_start(server.actual_port, &server.auth_url);
 
     server.block_until_done().await
+}
+
+pub async fn run_login_with_xai(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting xAI (Grok / SuperGrok) login flow");
+
+    clear_existing_auth_before_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        config.auth_route_config().as_ref(),
+    )
+    .await;
+
+    let opts = XaiLoginServerOptions::new(
+        config.codex_home.to_path_buf(),
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        config.auth_route_config(),
+    );
+    match run_xai_login_server(opts) {
+        Ok(server) => {
+            eprintln!(
+                "Starting xAI login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}\n",
+                server.actual_port, server.auth_url
+            );
+            match server.block_until_done().await {
+                Ok(()) => {
+                    eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("Error logging in to xAI: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error starting xAI login server: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
@@ -459,6 +504,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             }
             AuthMode::BedrockApiKey => {
                 eprintln!("Logged in using Amazon Bedrock API key");
+                std::process::exit(0);
+            }
+            AuthMode::XaiOAuth => {
+                eprintln!("Logged in using xAI (Grok / SuperGrok)");
                 std::process::exit(0);
             }
         },

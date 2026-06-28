@@ -74,6 +74,17 @@ pub enum CodexAuth {
     AgentIdentity(AgentIdentityAuth),
     PersonalAccessToken(PersonalAccessTokenAuth),
     BedrockApiKey(BedrockApiKeyAuth),
+    /// xAI (Grok / SuperGrok) OAuth tokens managed by Codex.
+    XaiOAuth(XaiOAuthAuth),
+}
+
+/// xAI OAuth auth state. Stores token data in an `auth.json`-backed mutex,
+/// similar to `ChatgptAuth` but without the ChatGPT-specific agent identity
+/// binding path.
+#[derive(Debug, Clone)]
+pub struct XaiOAuthAuth {
+    state: ChatgptAuthState,
+    storage: Arc<dyn AuthStorageBackend>,
 }
 
 /// Policy for resolving Agent Identity auth from a broader Codex auth snapshot.
@@ -147,6 +158,10 @@ impl PartialEq for CodexAuth {
         match (self, other) {
             (Self::PersonalAccessToken(a), Self::PersonalAccessToken(b)) => a == b,
             (Self::BedrockApiKey(a), Self::BedrockApiKey(b)) => a == b,
+            (Self::XaiOAuth(a), Self::XaiOAuth(b)) => {
+                a.state.auth_dot_json.lock().ok().map(|g| g.clone())
+                    == b.state.auth_dot_json.lock().ok().map(|g| g.clone())
+            }
             _ => self.api_auth_mode() == other.api_auth_mode(),
         }
     }
@@ -357,6 +372,20 @@ impl CodexAuth {
             };
             return Ok(Self::BedrockApiKey(auth));
         }
+        if auth_mode == AuthMode::XaiOAuth {
+            let storage_mode = auth_credentials_store_mode;
+            let client = create_default_auth_client(
+                &format!("{}/oauth/token", crate::xai_oauth::XAI_OAUTH_ISSUER),
+                auth_route_config,
+            )?;
+            let state = ChatgptAuthState {
+                auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
+                client,
+            };
+            let storage =
+                create_auth_storage(codex_home.to_path_buf(), storage_mode, keyring_backend_kind);
+            return Ok(Self::XaiOAuth(XaiOAuthAuth { state, storage }));
+        }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
         let client = create_default_auth_client(&refresh_token_endpoint(), auth_route_config)?;
@@ -381,6 +410,7 @@ impl CodexAuth {
                 unreachable!("personal access token mode is handled above")
             }
             AuthMode::BedrockApiKey => unreachable!("bedrock api key mode is handled above"),
+            AuthMode::XaiOAuth => unreachable!("xai oauth mode is handled above"),
         }
     }
 
@@ -461,6 +491,7 @@ impl CodexAuth {
             Self::AgentIdentity(_) => AuthMode::AgentIdentity,
             Self::PersonalAccessToken(_) => AuthMode::PersonalAccessToken,
             Self::BedrockApiKey(_) => AuthMode::BedrockApiKey,
+            Self::XaiOAuth(_) => AuthMode::XaiOAuth,
         }
     }
 
@@ -473,6 +504,7 @@ impl CodexAuth {
             Self::AgentIdentity(_) => AuthMode::AgentIdentity,
             Self::PersonalAccessToken(_) => AuthMode::PersonalAccessToken,
             Self::BedrockApiKey(_) => AuthMode::BedrockApiKey,
+            Self::XaiOAuth(_) => AuthMode::XaiOAuth,
         }
     }
 
@@ -482,6 +514,10 @@ impl CodexAuth {
 
     pub fn is_personal_access_token_auth(&self) -> bool {
         self.auth_mode() == AuthMode::PersonalAccessToken
+    }
+
+    pub fn is_xai_oauth_auth(&self) -> bool {
+        self.auth_mode() == AuthMode::XaiOAuth
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
@@ -497,7 +533,7 @@ impl CodexAuth {
     }
 
     fn supports_unauthorized_recovery(&self) -> bool {
-        matches!(self, Self::Chatgpt(_) | Self::ChatgptAuthTokens(_))
+        matches!(self, Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::XaiOAuth(_))
     }
 
     /// Returns `None` if `auth_mode() != AuthMode::ApiKey`.
@@ -508,7 +544,8 @@ impl CodexAuth {
             | Self::ChatgptAuthTokens(_)
             | Self::AgentIdentity(_)
             | Self::PersonalAccessToken(_)
-            | Self::BedrockApiKey(_) => None,
+            | Self::BedrockApiKey(_)
+            | Self::XaiOAuth(_) => None,
         }
     }
 
@@ -529,7 +566,7 @@ impl CodexAuth {
     pub fn get_token(&self) -> Result<String, std::io::Error> {
         match self {
             Self::ApiKey(auth) => Ok(auth.api_key.clone()),
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => {
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::XaiOAuth(_) => {
                 let access_token = self.get_token_data()?.access_token;
                 Ok(access_token)
             }
@@ -612,6 +649,7 @@ impl CodexAuth {
         let state = match self {
             Self::Chatgpt(auth) => &auth.state,
             Self::ChatgptAuthTokens(auth) => &auth.state,
+            Self::XaiOAuth(auth) => &auth.state,
             Self::ApiKey(_)
             | Self::AgentIdentity(_)
             | Self::PersonalAccessToken(_)
@@ -659,7 +697,8 @@ impl CodexAuth {
             Self::ApiKey(_)
             | Self::ChatgptAuthTokens(_)
             | Self::PersonalAccessToken(_)
-            | Self::BedrockApiKey(_) => Ok(None),
+            | Self::BedrockApiKey(_)
+            | Self::XaiOAuth(_) => Ok(None),
             Self::Chatgpt(_) => {
                 if policy == AgentIdentityAuthPolicy::JwtOnly {
                     return Ok(None);
@@ -814,6 +853,21 @@ impl ChatgptAuth {
         record: AgentIdentityAuthRecord,
     ) -> std::io::Result<()> {
         persist_agent_identity_record(&self.state.auth_dot_json, &self.storage, record)
+    }
+}
+
+impl XaiOAuthAuth {
+    fn current_auth_json(&self) -> Option<AuthDotJson> {
+        #[expect(clippy::unwrap_used)]
+        self.state.auth_dot_json.lock().unwrap().clone()
+    }
+
+    fn current_token_data(&self) -> Option<TokenData> {
+        self.current_auth_json().and_then(|auth| auth.tokens)
+    }
+
+    fn storage(&self) -> &Arc<dyn AuthStorageBackend> {
+        &self.storage
     }
 }
 
@@ -1088,6 +1142,9 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
             | (ForcedLoginMethod::Chatgpt, AuthMode::ChatgptAuthTokens)
             | (ForcedLoginMethod::Chatgpt, AuthMode::AgentIdentity)
             | (ForcedLoginMethod::Chatgpt, AuthMode::PersonalAccessToken) => None,
+            // xAI OAuth is its own login path; it doesn't violate either restriction.
+            (ForcedLoginMethod::Api, AuthMode::XaiOAuth)
+            | (ForcedLoginMethod::Chatgpt, AuthMode::XaiOAuth) => None,
             (ForcedLoginMethod::Api, AuthMode::Chatgpt)
             | (ForcedLoginMethod::Api, AuthMode::ChatgptAuthTokens)
             | (ForcedLoginMethod::Api, AuthMode::AgentIdentity)
@@ -1118,6 +1175,8 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
             CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_) => {
                 auth.get_account_id()
             }
+            // xAI OAuth doesn't have a ChatGPT workspace concept; skip the check.
+            CodexAuth::XaiOAuth(_) => return Ok(()),
             CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
                 let token_data = match auth.get_token_data() {
                     Ok(data) => data,
@@ -2180,6 +2239,9 @@ impl AuthManager {
                 },
                 (AuthMode::PersonalAccessToken, AuthMode::PersonalAccessToken) => a == b,
                 (AuthMode::BedrockApiKey, AuthMode::BedrockApiKey) => a == b,
+                (AuthMode::XaiOAuth, AuthMode::XaiOAuth) => {
+                    a.get_current_auth_json() == b.get_current_auth_json()
+                }
                 _ => false,
             },
             _ => false,
@@ -2451,6 +2513,15 @@ impl AuthManager {
                 self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
                     .await
             }
+            CodexAuth::XaiOAuth(xai_auth) => {
+                let token_data = xai_auth.current_token_data().ok_or_else(|| {
+                    RefreshTokenError::Transient(std::io::Error::other(
+                        "xAI token data is not available.",
+                    ))
+                })?;
+                self.refresh_and_persist_xai_token(&xai_auth, token_data.refresh_token)
+                    .await
+            }
             CodexAuth::ApiKey(_)
             | CodexAuth::AgentIdentity(_)
             | CodexAuth::PersonalAccessToken(_)
@@ -2518,14 +2589,16 @@ impl AuthManager {
     }
 
     fn should_refresh_proactively(auth: &CodexAuth) -> bool {
-        let chatgpt_auth = match auth {
-            CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
+        let auth_dot_json = match auth {
+            CodexAuth::Chatgpt(chatgpt_auth) => match chatgpt_auth.current_auth_json() {
+                Some(auth_dot_json) => auth_dot_json,
+                None => return false,
+            },
+            CodexAuth::XaiOAuth(xai_auth) => match xai_auth.current_auth_json() {
+                Some(auth_dot_json) => auth_dot_json,
+                None => return false,
+            },
             _ => return false,
-        };
-
-        let auth_dot_json = match chatgpt_auth.current_auth_json() {
-            Some(auth_dot_json) => auth_dot_json,
-            None => return false,
         };
         if let Some(tokens) = auth_dot_json.tokens.as_ref()
             && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
@@ -2609,6 +2682,40 @@ impl AuthManager {
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,
+        )
+        .map_err(RefreshTokenError::from)?;
+        self.reload().await;
+
+        Ok(())
+    }
+
+    /// Refreshes xAI OAuth tokens against `auth.x.ai/oauth/token`, persists
+    /// the updated auth state, and reloads the in-memory cache.
+    async fn refresh_and_persist_xai_token(
+        &self,
+        auth: &XaiOAuthAuth,
+        refresh_token: String,
+    ) -> Result<(), RefreshTokenError> {
+        let refreshed = crate::xai_oauth::refresh_xai_token(
+            &refresh_token,
+            self.auth_route_config.as_ref(),
+        )
+        .await
+        .map_err(|err| {
+            let message = err.to_string();
+            let failed = classify_refresh_token_failure(&message);
+            if failed.reason != RefreshTokenFailedReason::Other {
+                RefreshTokenError::Permanent(failed)
+            } else {
+                RefreshTokenError::Transient(std::io::Error::other(message))
+            }
+        })?;
+
+        persist_tokens(
+            auth.storage(),
+            Some(refreshed.id_token),
+            Some(refreshed.access_token),
+            Some(refreshed.refresh_token),
         )
         .map_err(RefreshTokenError::from)?;
         self.reload().await;

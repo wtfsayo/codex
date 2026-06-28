@@ -70,7 +70,8 @@ impl AmazonBedrockModelProvider {
                 | CodexAuth::Chatgpt(_)
                 | CodexAuth::ChatgptAuthTokens(_)
                 | CodexAuth::AgentIdentity(_)
-                | CodexAuth::PersonalAccessToken(_) => None,
+                | CodexAuth::PersonalAccessToken(_)
+                | CodexAuth::XaiOAuth(_) => None,
             })
     }
 
