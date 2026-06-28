@@ -181,22 +181,35 @@ impl ChatWidget {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
-            let preset_for_action = preset.clone();
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                let preset_for_event = preset_for_action.clone();
-                tx.send(AppEvent::OpenReasoningPopup {
-                    model: preset_for_event,
-                });
-            })];
+            let directly_apply = preset.supported_reasoning_efforts.len() <= 1;
+            let model_for_action = preset.model.clone();
+            let effort_for_action = Some(preset.default_reasoning_effort.clone());
+            let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
+                model_for_action.as_str(),
+                effort_for_action.clone(),
+            );
+            let actions: Vec<SelectionAction> = if directly_apply {
+                Self::model_selection_actions(
+                    model_for_action,
+                    effort_for_action,
+                    should_prompt_plan_mode_scope,
+                )
+            } else {
+                let preset_for_action = preset.clone();
+                vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenReasoningPopup {
+                        model: preset_for_action.clone(),
+                    });
+                })]
+            };
             items.push(SelectionItem {
                 name: preset.model.clone(),
                 description,
                 is_current,
                 is_default: preset.is_default,
                 actions,
-                dismiss_on_select: single_supported_effort,
-                dismiss_parent_on_child_accept: !single_supported_effort,
+                dismiss_on_select: directly_apply,
+                dismiss_parent_on_child_accept: !directly_apply,
                 ..Default::default()
             });
         }
