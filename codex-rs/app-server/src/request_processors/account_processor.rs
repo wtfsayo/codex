@@ -297,7 +297,7 @@ impl AccountRequestProcessor {
             Some(ForcedLoginMethod::Chatgpt)
         ) {
             return Err(invalid_request(
-                "API key login is disabled. Use ChatGPT login instead.",
+                "API key login is disabled. Use SuperGrok login instead.",
             ));
         }
 
@@ -337,11 +337,11 @@ impl AccountRequestProcessor {
         }
     }
 
-    // Build options for a ChatGPT login attempt; performs validation.
+    // Build options for a SuperGrok (xAI OAuth) login attempt; performs validation.
     async fn login_chatgpt_common(
         &self,
-        codex_streamlined_login: bool,
-    ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
+        _codex_streamlined_login: bool,
+    ) -> std::result::Result<XaiLoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
         if self.auth_manager.is_external_chatgpt_auth_active() {
@@ -350,43 +350,16 @@ impl AccountRequestProcessor {
 
         if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
             return Err(invalid_request(
-                "ChatGPT login is disabled. Use API key login instead.",
+                "SuperGrok login is disabled. Use API key login instead.",
             ));
         }
 
-        let opts = LoginServerOptions {
-            open_browser: false,
-            codex_streamlined_login,
-            ..LoginServerOptions::new(
-                config.codex_home.to_path_buf(),
-                oauth_client_id(),
-                config.forced_chatgpt_workspace_id.clone(),
-                config.cli_auth_credentials_store_mode,
-                config.auth_keyring_backend_kind(),
-                config.auth_route_config(),
-            )
-        };
-        #[cfg(debug_assertions)]
-        let opts = {
-            let mut opts = opts;
-            if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
-                && !issuer.trim().is_empty()
-            {
-                opts.issuer = issuer;
-            }
-            opts
-        };
-
-        Ok(opts)
-    }
-
-    fn login_chatgpt_device_code_start_error(err: IoError) -> JSONRPCErrorError {
-        let is_not_found = err.kind() == std::io::ErrorKind::NotFound;
-        if is_not_found {
-            invalid_request(err.to_string())
-        } else {
-            internal_error(format!("failed to request device code: {err}"))
-        }
+        Ok(XaiLoginServerOptions::new(
+            config.codex_home.to_path_buf(),
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+            config.auth_route_config(),
+        ))
     }
 
     async fn login_chatgpt_v2(
@@ -402,8 +375,9 @@ impl AccountRequestProcessor {
         &self,
         codex_streamlined_login: bool,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
-        let server = run_login_server(opts)
+        let mut opts = self.login_chatgpt_common(codex_streamlined_login).await?;
+        opts.open_browser = false;
+        let server = run_xai_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
         let shutdown_handle = server.cancel_handle();
@@ -473,69 +447,12 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_device_code_response(
         &self,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self
+        let _ = self
             .login_chatgpt_common(/*codex_streamlined_login*/ false)
             .await?;
-        let device_code = request_device_code(&opts)
-            .await
-            .map_err(Self::login_chatgpt_device_code_start_error)?;
-        let login_id = Uuid::new_v4();
-        let cancel = CancellationToken::new();
-
-        {
-            let mut guard = self.active_login.lock().await;
-            if let Some(existing) = guard.take() {
-                drop(existing);
-            }
-            *guard = Some(ActiveLogin::DeviceCode {
-                cancel: cancel.clone(),
-                login_id,
-            });
-        }
-
-        let verification_url = device_code.verification_url.clone();
-        let user_code = device_code.user_code.clone();
-
-        let outgoing_clone = self.outgoing.clone();
-        let config_manager = self.config_manager.clone();
-        let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-        let active_login = self.active_login.clone();
-        tokio::spawn(async move {
-            let (success, error_msg) = tokio::select! {
-                _ = cancel.cancelled() => {
-                    (false, Some("Login was not completed".to_string()))
-                }
-                r = complete_device_code_login(opts, device_code) => {
-                    match r {
-                        Ok(()) => (true, None),
-                        Err(err) => (false, Some(err.to_string())),
-                    }
-                }
-            };
-
-            Self::send_chatgpt_login_completion_notifications(
-                &outgoing_clone,
-                config_manager,
-                thread_manager,
-                chatgpt_base_url,
-                login_id,
-                success,
-                error_msg,
-            )
-            .await;
-
-            let mut guard = active_login.lock().await;
-            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
-                *guard = None;
-            }
-        });
-
-        Ok(LoginAccountResponse::ChatgptDeviceCode {
-            login_id: login_id.to_string(),
-            verification_url,
-            user_code,
-        })
+        Err(invalid_request(
+            "Device code login is not supported. Sign in with SuperGrok in your browser or use an API key.",
+        ))
     }
 
     async fn cancel_login_chatgpt_common(
@@ -789,11 +706,10 @@ impl AccountRequestProcessor {
         self.refresh_token_if_requested(do_refresh).await;
 
         // Determine whether auth is required based on the active model provider.
-        // If a custom provider is configured with `requires_openai_auth == false`,
-        // then no auth step is required; otherwise, default to requiring auth.
-        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+        let requires_auth =
+            self.config.model_provider.requires_openai_auth || self.config.model_provider.is_xai();
 
-        let response = if !requires_openai_auth {
+        let response = if !requires_auth {
             GetAuthStatusResponse {
                 auth_method: None,
                 auth_token: None,

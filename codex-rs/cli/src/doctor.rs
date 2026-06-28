@@ -49,6 +49,7 @@ use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
+use codex_login::XAI_API_KEY_ENV_VAR;
 use codex_login::default_client::build_reqwest_client;
 use codex_login::default_client::default_headers;
 use codex_login::load_auth_dot_json;
@@ -1360,10 +1361,9 @@ fn stored_auth_issues(
                 .openai_api_key
                 .as_deref()
                 .is_some_and(|key| !key.trim().is_empty());
-            let env_key_present =
-                env_var_present(OPENAI_API_KEY_ENV_VAR) || env_var_present(CODEX_API_KEY_ENV_VAR);
+            let env_key_present = env_var_present(XAI_API_KEY_ENV_VAR);
             if !stored_key_present && !env_key_present {
-                issues.push("API key auth is missing an API key");
+                issues.push("xAI API key auth is missing an API key");
             }
         }
         AuthMode::Chatgpt => {
@@ -1421,19 +1421,17 @@ fn stored_auth_issues(
                 issues.push("Bedrock API key auth is missing a Bedrock API key");
             }
         }
-        AuthMode::XaiOAuth => {
-            match auth.tokens.as_ref() {
-                Some(tokens) => {
-                    if tokens.access_token.trim().is_empty() {
-                        issues.push("xAI auth is missing an access token");
-                    }
-                    if tokens.refresh_token.trim().is_empty() {
-                        issues.push("xAI auth is missing a refresh token");
-                    }
+        AuthMode::XaiOAuth => match auth.tokens.as_ref() {
+            Some(tokens) => {
+                if tokens.access_token.trim().is_empty() {
+                    issues.push("xAI auth is missing an access token");
                 }
-                None => issues.push("xAI auth is missing token data"),
+                if tokens.refresh_token.trim().is_empty() {
+                    issues.push("xAI auth is missing a refresh token");
+                }
             }
-        }
+            None => issues.push("xAI auth is missing token data"),
+        },
     }
     issues
 }
@@ -2609,7 +2607,7 @@ fn provider_auth_reachability_mode_from_auth(
     if !requires_openai_auth {
         return ProviderAuthReachabilityMode::NotRequired;
     }
-    if env_var_present(OPENAI_API_KEY_ENV_VAR) || env_var_present(CODEX_API_KEY_ENV_VAR) {
+    if env_var_present(XAI_API_KEY_ENV_VAR) {
         return ProviderAuthReachabilityMode::ApiKey;
     }
     if env_var_present(CODEX_ACCESS_TOKEN_ENV_VAR) {

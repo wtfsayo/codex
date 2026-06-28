@@ -1387,7 +1387,7 @@ async fn run_ratatui_app(
         !uses_remote_workspace && should_show_trust_screen(&initial_config);
     #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
-    let login_status = if initial_config.model_provider.requires_openai_auth {
+    let login_status = if provider_requires_user_auth(&initial_config.model_provider) {
         let Some(app_server) = app_server.as_mut() else {
             unreachable!("app server should exist when auth is required");
         };
@@ -1884,7 +1884,7 @@ async fn get_login_status(
     app_server: &mut AppServerSession,
     config: &Config,
 ) -> color_eyre::Result<LoginStatus> {
-    if !config.model_provider.requires_openai_auth {
+    if !provider_requires_user_auth(&config.model_provider) {
         return Ok(LoginStatus::NotAuthenticated);
     }
 
@@ -1895,6 +1895,10 @@ async fn get_login_status(
         Some(AppServerAccount::AmazonBedrock { .. }) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
     })
+}
+
+fn provider_requires_user_auth(provider: &codex_model_provider_info::ModelProviderInfo) -> bool {
+    provider.requires_openai_auth || provider.is_xai()
 }
 
 async fn load_config_or_exit(
@@ -2000,9 +2004,7 @@ fn should_show_onboarding(
 }
 
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
-    // Only show the login screen for providers that actually require OpenAI auth
-    // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
-    if !config.model_provider.requires_openai_auth {
+    if !provider_requires_user_auth(&config.model_provider) {
         return false;
     }
 

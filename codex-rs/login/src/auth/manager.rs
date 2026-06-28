@@ -375,7 +375,7 @@ impl CodexAuth {
         if auth_mode == AuthMode::XaiOAuth {
             let storage_mode = auth_credentials_store_mode;
             let client = create_default_auth_client(
-                &format!("{}/oauth/token", crate::xai_oauth::XAI_OAUTH_ISSUER),
+                &format!("{}/oauth2/token", crate::xai_oauth::XAI_OAUTH_ISSUER),
                 auth_route_config,
             )?;
             let state = ChatgptAuthState {
@@ -533,7 +533,10 @@ impl CodexAuth {
     }
 
     fn supports_unauthorized_recovery(&self) -> bool {
-        matches!(self, Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::XaiOAuth(_))
+        matches!(
+            self,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::XaiOAuth(_)
+        )
     }
 
     /// Returns `None` if `auth_mode() != AuthMode::ApiKey`.
@@ -889,19 +892,21 @@ fn persist_agent_identity_record(
     Ok(())
 }
 
+pub const XAI_API_KEY_ENV_VAR: &str = "XAI_API_KEY";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
 pub const CODEX_ACCESS_TOKEN_ENV_VAR: &str = "CODEX_ACCESS_TOKEN";
 
+pub fn read_xai_api_key_from_env() -> Option<String> {
+    read_non_empty_env_var(XAI_API_KEY_ENV_VAR)
+}
+
 pub fn read_openai_api_key_from_env() -> Option<String> {
-    env::var(OPENAI_API_KEY_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    read_xai_api_key_from_env()
 }
 
 pub fn read_codex_api_key_from_env() -> Option<String> {
-    read_non_empty_env_var(CODEX_API_KEY_ENV_VAR)
+    read_xai_api_key_from_env()
 }
 
 pub fn read_codex_access_token_from_env() -> Option<String> {
@@ -1279,11 +1284,6 @@ async fn load_auth(
     agent_identity_authapi_base_url: Option<&str>,
     auth_route_config: Option<&AuthRouteConfig>,
 ) -> std::io::Result<Option<CodexAuth>> {
-    // API key via env var takes precedence over any other auth method.
-    if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
-        return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
-    }
-
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
     // first so external auth takes precedence over any persisted credentials.
     let ephemeral_storage = create_auth_storage(
@@ -1330,7 +1330,7 @@ async fn load_auth(
 
     // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
     if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
-        return Ok(None);
+        return api_key_auth_from_env(enable_codex_api_key_env);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
@@ -1341,7 +1341,7 @@ async fn load_auth(
     );
     let auth_dot_json = match storage.load()? {
         Some(auth) => auth,
-        None => return Ok(None),
+        None => return api_key_auth_from_env(enable_codex_api_key_env),
     };
 
     let auth = CodexAuth::from_auth_dot_json(
@@ -1358,6 +1358,13 @@ async fn load_auth(
         ensure_personal_access_token_workspace_allowed(forced_chatgpt_workspace_id, auth)?;
     }
     Ok(Some(auth))
+}
+
+fn api_key_auth_from_env(enable_codex_api_key_env: bool) -> std::io::Result<Option<CodexAuth>> {
+    if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
+        return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
+    }
+    Ok(None)
 }
 
 // Persist refreshed tokens into auth storage and update last_refresh.
@@ -2689,27 +2696,25 @@ impl AuthManager {
         Ok(())
     }
 
-    /// Refreshes xAI OAuth tokens against `auth.x.ai/oauth/token`, persists
+    /// Refreshes xAI OAuth tokens against `auth.x.ai/oauth2/token`, persists
     /// the updated auth state, and reloads the in-memory cache.
     async fn refresh_and_persist_xai_token(
         &self,
         auth: &XaiOAuthAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
-        let refreshed = crate::xai_oauth::refresh_xai_token(
-            &refresh_token,
-            self.auth_route_config.as_ref(),
-        )
-        .await
-        .map_err(|err| {
-            let message = err.to_string();
-            let failed = classify_refresh_token_failure(&message);
-            if failed.reason != RefreshTokenFailedReason::Other {
-                RefreshTokenError::Permanent(failed)
-            } else {
-                RefreshTokenError::Transient(std::io::Error::other(message))
-            }
-        })?;
+        let refreshed =
+            crate::xai_oauth::refresh_xai_token(&refresh_token, self.auth_route_config.as_ref())
+                .await
+                .map_err(|err| {
+                    let message = err.to_string();
+                    let failed = classify_refresh_token_failure(&message);
+                    if failed.reason != RefreshTokenFailedReason::Other {
+                        RefreshTokenError::Permanent(failed)
+                    } else {
+                        RefreshTokenError::Transient(std::io::Error::other(message))
+                    }
+                })?;
 
         persist_tokens(
             auth.storage(),

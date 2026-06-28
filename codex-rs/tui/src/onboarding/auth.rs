@@ -15,7 +15,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
-use codex_login::read_openai_api_key_from_env;
+use codex_login::read_xai_api_key_from_env;
 use codex_protocol::auth::AuthMode;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -313,9 +313,9 @@ impl AuthModeWidget {
     }
 
     fn displayed_sign_in_options(&self) -> Vec<SignInOption> {
-        let mut options = vec![SignInOption::ChatGpt];
+        let mut options = Vec::new();
         if self.is_chatgpt_login_allowed() {
-            options.push(SignInOption::DeviceCode);
+            options.push(SignInOption::ChatGpt);
         }
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
@@ -327,7 +327,6 @@ impl AuthModeWidget {
         let mut options = Vec::new();
         if self.is_chatgpt_login_allowed() {
             options.push(SignInOption::ChatGpt);
-            options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
@@ -366,7 +365,11 @@ impl AuthModeWidget {
             }
             SignInOption::DeviceCode => {
                 if self.is_chatgpt_login_allowed() {
-                    self.start_device_code_login();
+                    self.set_error(Some(
+                        "Device code login is not supported. Sign in with SuperGrok or use an API key."
+                            .to_string(),
+                    ));
+                    self.request_frame.schedule_frame();
                 }
             }
             SignInOption::ApiKey => {
@@ -390,11 +393,11 @@ impl AuthModeWidget {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "  ".into(),
-                "Sign in with ChatGPT to use Codex as part of your paid plan".into(),
+                "Sign in with SuperGrok to use Codex with your xAI subscription".into(),
             ]),
             Line::from(vec![
                 "  ".into(),
-                "or connect an API key for usage-based billing".into(),
+                "or connect an XAI_API_KEY for usage-based billing".into(),
             ]),
             "".into(),
         ];
@@ -428,12 +431,11 @@ impl AuthModeWidget {
             vec![line1, line2]
         };
 
-        let chatgpt_description = if !self.is_chatgpt_login_allowed() {
-            "ChatGPT login is disabled"
+        let supergrok_description = if !self.is_chatgpt_login_allowed() {
+            "SuperGrok login is disabled"
         } else {
-            "Usage included with Plus, Pro, Business, and Enterprise plans"
+            "Sign in with your xAI account in the browser"
         };
-        let device_code_description = "Sign in from another device with a one-time code";
 
         for (idx, option) in self.displayed_sign_in_options().into_iter().enumerate() {
             match option {
@@ -441,24 +443,17 @@ impl AuthModeWidget {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Sign in with ChatGPT",
-                        chatgpt_description,
+                        "Sign in with SuperGrok",
+                        supergrok_description,
                     ));
                 }
-                SignInOption::DeviceCode => {
-                    lines.extend(create_mode_item(
-                        idx,
-                        option,
-                        "Sign in with Device Code",
-                        device_code_description,
-                    ));
-                }
+                SignInOption::DeviceCode => {}
                 SignInOption::ApiKey => {
                     lines.extend(create_mode_item(
                         idx,
                         option,
                         "Provide your own API key",
-                        "Pay for what you use",
+                        "Set XAI_API_KEY for pay-as-you-go usage",
                     ));
                 }
             }
@@ -467,7 +462,7 @@ impl AuthModeWidget {
 
         if !self.is_api_login_allowed() {
             lines.push(
-                "  API key login is disabled by this workspace. Sign in with ChatGPT to continue."
+                "  API key login is disabled by this workspace. Sign in with SuperGrok to continue."
                     .dim()
                     .into(),
             );
@@ -514,14 +509,6 @@ impl AuthModeWidget {
                 state.auth_url.as_str().cyan().underlined(),
             ]));
             lines.push("".into());
-            lines.push(Line::from(vec![
-                "  On a remote or headless machine? Press ".into(),
-                self.cancel_binding().into(),
-                " and choose ".into(),
-                "Sign in with Device Code".cyan(),
-                ".".into(),
-            ]));
-            lines.push("".into());
             Some(state.auth_url.clone())
         } else {
             None
@@ -545,20 +532,15 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ Signed in with your ChatGPT account"
-                .fg(Color::Green)
-                .into(),
+            "✓ Signed in with SuperGrok".fg(Color::Green).into(),
             "".into(),
             "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Codex".into(),
             Line::from(vec![
                 "  For more details see the ".into(),
-                crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://developers.openai.com/codex/security",
-                    "Codex docs",
-                )
-                .underlined(),
+                crate::terminal_hyperlinks::osc8_hyperlink("https://docs.x.ai", "xAI docs")
+                    .underlined(),
             ])
             .dim(),
             "".into(),
@@ -566,17 +548,6 @@ impl AuthModeWidget {
             "  Review the code it writes and commands it runs"
                 .dim()
                 .into(),
-            "".into(),
-            "  Powered by your ChatGPT account".into(),
-            Line::from(vec![
-                "  Uses your plan's rate limits and ".into(),
-                crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://chatgpt.com/#settings",
-                    "training data preferences",
-                )
-                .underlined(),
-            ])
-            .dim(),
             "".into(),
             Line::from(vec![
                 "  Press ".fg(Color::Cyan),
@@ -591,11 +562,7 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![
-            "✓ Signed in with your ChatGPT account"
-                .fg(Color::Green)
-                .into(),
-        ];
+        let lines = vec!["✓ Signed in with SuperGrok".fg(Color::Green).into()];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -625,14 +592,14 @@ impl AuthModeWidget {
         let mut intro_lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "Use your own OpenAI API key for usage-based billing".bold(),
+                "Use your XAI_API_KEY for usage-based billing".bold(),
             ]),
             "".into(),
             "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
             "".into(),
         ];
         if state.prepopulated_from_env {
-            intro_lines.push("  Detected OPENAI_API_KEY environment variable.".into());
+            intro_lines.push("  Detected XAI_API_KEY environment variable.".into());
             intro_lines.push(
                 "  Paste a different key if you prefer to use another account."
                     .dim()
@@ -773,7 +740,7 @@ impl AuthModeWidget {
             return;
         }
         self.set_error(/*message*/ None);
-        let prefill_from_env = read_openai_api_key_from_env();
+        let prefill_from_env = read_xai_api_key_from_env();
         let mut guard = self.sign_in_state.write().unwrap();
         match &mut *guard {
             SignInState::ApiKeyEntry(state) => {
@@ -846,7 +813,8 @@ impl AuthModeWidget {
     fn handle_existing_chatgpt_login(&mut self) -> bool {
         if matches!(
             self.login_status,
-            LoginStatus::AuthMode(auth_mode) if auth_mode.has_chatgpt_account()
+            LoginStatus::AuthMode(auth_mode)
+                if auth_mode.has_chatgpt_account() || auth_mode == AuthMode::XaiOAuth
         ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
@@ -901,15 +869,6 @@ impl AuthModeWidget {
             }
             request_frame.schedule_frame();
         });
-    }
-
-    fn start_device_code_login(&mut self) {
-        if self.handle_existing_chatgpt_login() {
-            return;
-        }
-
-        self.set_error(/*message*/ None);
-        headless_chatgpt_login::start_headless_chatgpt_login(self);
     }
 
     pub(crate) fn on_account_login_completed(

@@ -139,6 +139,10 @@ impl ShutdownHandle {
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_one();
     }
+
+    pub(crate) fn from_notify(shutdown_notify: Arc<tokio::sync::Notify>) -> Self {
+        Self { shutdown_notify }
+    }
 }
 
 /// Starts a local callback server and returns the browser auth URL.

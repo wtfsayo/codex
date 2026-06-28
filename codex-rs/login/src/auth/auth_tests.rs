@@ -1352,6 +1352,10 @@ fn remove_access_token_env_var() -> EnvVarGuard {
     EnvVarGuard::remove(CODEX_ACCESS_TOKEN_ENV_VAR)
 }
 
+fn remove_xai_api_key_env_var() -> EnvVarGuard {
+    EnvVarGuard::remove(XAI_API_KEY_ENV_VAR)
+}
+
 #[tokio::test]
 #[serial(codex_auth_env)]
 async fn load_auth_reads_access_token_from_env() {
@@ -1594,12 +1598,10 @@ async fn personal_access_token_does_not_offer_unauthorized_recovery() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
-async fn load_auth_keeps_codex_api_key_env_precedence() {
+async fn load_auth_keeps_xai_api_key_env_precedence() {
     let codex_home = tempdir().unwrap();
-    let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
-    let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
-    let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, &agent_identity);
-    let _api_key_guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
+    let _access_token_guard = remove_access_token_env_var();
+    let _api_key_guard = EnvVarGuard::set(XAI_API_KEY_ENV_VAR, "xai-env-key");
 
     let auth = super::load_auth(
         codex_home.path(),
@@ -1615,7 +1617,53 @@ async fn load_auth_keeps_codex_api_key_env_precedence() {
     .expect("env auth should load")
     .expect("env auth should be present");
 
-    assert_eq!(auth.api_key(), Some("sk-env"));
+    assert_eq!(auth.api_key(), Some("xai-env-key"));
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
+async fn load_auth_prefers_persisted_xai_oauth_over_env_api_key() {
+    let codex_home = tempdir().unwrap();
+    let _access_token_guard = remove_access_token_env_var();
+    let _api_key_guard = EnvVarGuard::set(XAI_API_KEY_ENV_VAR, "xai-env-key");
+    let fake_jwt = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: None,
+        chatgpt_account_id: None,
+    })
+    .expect("fake jwt");
+    let auth_file = get_auth_file(codex_home.path());
+    std::fs::write(
+        auth_file,
+        serde_json::to_string_pretty(&json!({
+            "auth_mode": "xaiOAuth",
+            "tokens": {
+                "id_token": fake_jwt,
+                "access_token": "xai-oauth-access-token",
+                "refresh_token": "xai-oauth-refresh-token",
+            },
+            "last_refresh": Utc::now(),
+        }))
+        .expect("auth json"),
+    )
+    .expect("write auth file");
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ true,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::Direct,
+        /*agent_identity_authapi_base_url*/ None,
+        /*auth_route_config*/ None,
+    )
+    .await
+    .expect("persisted xai oauth should load")
+    .expect("persisted xai oauth should be present");
+
+    assert!(auth.is_xai_oauth_auth());
+    assert_eq!(auth.get_token().expect("token"), "xai-oauth-access-token");
 }
 
 #[tokio::test]
@@ -1653,6 +1701,7 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
 async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     let codex_home = tempdir().unwrap();
     let _access_token_guard = remove_access_token_env_var();
+    let _api_key_guard = remove_xai_api_key_env_var();
     let _jwt = write_auth_file(
         AuthFileParams {
             openai_api_key: None,
@@ -1698,6 +1747,7 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
         .mount(&server)
         .await;
     let _access_token_guard = remove_access_token_env_var();
+    let _api_key_guard = remove_xai_api_key_env_var();
     let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
     super::login_with_access_token(
         codex_home.path(),
@@ -1799,6 +1849,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
 async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismatch() {
     let codex_home = tempdir().unwrap();
     let _access_token_guard = remove_access_token_env_var();
+    let _api_key_guard = remove_xai_api_key_env_var();
     let record = agent_identity_record(WORKSPACE_ID_DISALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
@@ -1898,7 +1949,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
 #[tokio::test]
 #[serial(codex_auth_env)]
 async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
-    let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
+    let _guard = EnvVarGuard::set(XAI_API_KEY_ENV_VAR, "xai-env-key");
     let _access_token_guard = remove_access_token_env_var();
     let codex_home = tempdir().unwrap();
 

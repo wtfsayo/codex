@@ -3,7 +3,7 @@
 //! This module implements the PKCE loopback OAuth flow against `auth.x.ai`,
 //! mirroring the ChatGPT flow in `server.rs` but targeting xAI's issuer. The
 //! resulting tokens are persisted in `auth.json` under `AuthMode::XaiOAuth`
-//! and refreshed against `https://auth.x.ai/oauth/token`.
+//! and refreshed against `https://auth.x.ai/oauth2/token`.
 
 use base64::Engine;
 use rand::RngCore;
@@ -27,6 +27,7 @@ use crate::default_client::build_raw_auth_reqwest_client;
 use crate::outbound_proxy::AuthRouteConfig;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
+use crate::server::ShutdownHandle;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use chrono::Utc;
@@ -40,7 +41,7 @@ pub const XAI_OAUTH_ISSUER: &str = "https://auth.x.ai";
 pub const XAI_OAUTH_DISCOVERY_URL: &str = "https://auth.x.ai/.well-known/openid-configuration";
 
 /// xAI OAuth client id for Codex CLI. This is the public SuperGrok CLI client.
-pub const XAI_OAUTH_CLIENT_ID: &str = "org_4t2qZ4p1vM5K9nL7x";
+pub const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 /// OAuth scopes requested from xAI.
 pub const XAI_OAUTH_SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
@@ -104,6 +105,11 @@ impl XaiLoginServer {
     pub fn cancel(&self) {
         self.shutdown_notify.notify_one();
     }
+
+    /// Returns a cloneable cancel handle for the running server.
+    pub fn cancel_handle(&self) -> ShutdownHandle {
+        ShutdownHandle::from_notify(self.shutdown_notify.clone())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -146,9 +152,8 @@ pub fn run_xai_login_server(opts: XaiLoginServerOptions) -> io::Result<XaiLoginS
     };
     let server = Arc::new(server);
 
-    let redirect_uri = format!(
-        "http://{XAI_OAUTH_REDIRECT_HOST}:{actual_port}{XAI_OAUTH_REDIRECT_PATH}"
-    );
+    let redirect_uri =
+        format!("http://{XAI_OAUTH_REDIRECT_HOST}:{actual_port}{XAI_OAUTH_REDIRECT_PATH}");
     let auth_url = build_xai_authorize_url(&redirect_uri, &pkce, &state);
 
     if opts.open_browser {
@@ -334,10 +339,9 @@ async fn process_xai_request(
                         eprintln!("xAI persist error: {err}");
                         return HandledRequest::ResponseAndExit {
                             headers: vec![],
-                            body: b"Sign-in completed but credentials could not be saved locally".to_vec(),
-                            result: Err(io::Error::other(format!(
-                                "xAI persist failed: {err}"
-                            ))),
+                            body: b"Sign-in completed but credentials could not be saved locally"
+                                .to_vec(),
+                            result: Err(io::Error::other(format!("xAI persist failed: {err}"))),
                         };
                     }
 
@@ -379,6 +383,7 @@ async fn process_xai_request(
 }
 
 fn build_xai_authorize_url(redirect_uri: &str, pkce: &PkceCodes, state: &str) -> String {
+    let nonce = generate_state();
     let query = vec![
         ("response_type".to_string(), "code".to_string()),
         ("client_id".to_string(), XAI_OAUTH_CLIENT_ID.to_string()),
@@ -390,13 +395,16 @@ fn build_xai_authorize_url(redirect_uri: &str, pkce: &PkceCodes, state: &str) ->
         ),
         ("code_challenge_method".to_string(), "S256".to_string()),
         ("state".to_string(), state.to_string()),
+        ("nonce".to_string(), nonce),
+        ("plan".to_string(), "generic".to_string()),
+        ("referrer".to_string(), "codex".to_string()),
     ];
     let qs = query
         .into_iter()
         .map(|(k, v)| format!("{k}={}", urlencoding::encode(&v)))
         .collect::<Vec<_>>()
         .join("&");
-    format!("{XAI_OAUTH_ISSUER}/oauth/authorize?{qs}")
+    format!("{XAI_OAUTH_ISSUER}/oauth2/authorize?{qs}")
 }
 
 fn generate_state() -> String {
@@ -427,7 +435,7 @@ pub(crate) async fn exchange_xai_code_for_tokens(
     }
 
     let client = build_raw_auth_reqwest_client(XAI_OAUTH_ISSUER, auth_route_config)?;
-    let token_endpoint = format!("{XAI_OAUTH_ISSUER}/oauth/token");
+    let token_endpoint = format!("{XAI_OAUTH_ISSUER}/oauth2/token");
     info!(
         token_endpoint = %token_endpoint,
         redirect_uri = %redirect_uri,
@@ -477,7 +485,7 @@ pub async fn refresh_xai_token(
     }
 
     let client = build_raw_auth_reqwest_client(XAI_OAUTH_ISSUER, auth_route_config)?;
-    let token_endpoint = format!("{XAI_OAUTH_ISSUER}/oauth/token");
+    let token_endpoint = format!("{XAI_OAUTH_ISSUER}/oauth2/token");
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")

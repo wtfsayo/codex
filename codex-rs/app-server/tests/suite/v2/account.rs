@@ -986,7 +986,7 @@ async fn login_account_api_key_rejected_when_forced_chatgpt() -> Result<()> {
 
     assert_eq!(
         err.error.message,
-        "API key login is disabled. Use ChatGPT login instead."
+        "API key login is disabled. Use SuperGrok login instead."
     );
     Ok(())
 }
@@ -1014,35 +1014,20 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 
     assert_eq!(
         err.error.message,
-        "ChatGPT login is disabled. Use API key login instead."
+        "SuperGrok login is disabled. Use API key login instead."
     );
     Ok(())
 }
 
+const DEVICE_CODE_UNSUPPORTED_MESSAGE: &str =
+    "Device code login is not supported. Sign in with SuperGrok in your browser or use an API key.";
+
 #[tokio::test]
 async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mock_server = MockServer::start().await;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            requires_openai_auth: Some(true),
-            base_url: Some(format!("{}/v1", mock_server.uri())),
-            ..Default::default()
-        },
-    )?;
-    write_models_cache(codex_home.path())?;
-    mock_device_code_usercode_failure(&mock_server, /*status*/ 404).await;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
@@ -1051,13 +1036,7 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert!(
-        err.error
-            .message
-            .contains("device code login is not enabled"),
-        "unexpected error: {:?}",
-        err.error.message
-    );
+    assert_eq!(err.error.message, DEVICE_CODE_UNSUPPORTED_MESSAGE);
 
     let maybe_completed = timeout(
         Duration::from_millis(500),
@@ -1066,11 +1045,11 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
     .await;
     assert!(
         maybe_completed.is_err(),
-        "account/login/completed should not be emitted when device code start fails"
+        "account/login/completed should not be emitted when device code is unsupported"
     );
     assert!(
         !codex_home.path().join("auth.json").exists(),
-        "auth.json should not be created when device code start fails"
+        "auth.json should not be created when device code login is unsupported"
     );
     Ok(())
 }
@@ -1078,243 +1057,54 @@ async fn login_account_chatgpt_device_code_returns_error_when_disabled() -> Resu
 #[tokio::test]
 async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mock_server = MockServer::start().await;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            requires_openai_auth: Some(true),
-            base_url: Some(format!("{}/v1", mock_server.uri())),
-            ..Default::default()
-        },
-    )?;
-    write_models_cache(codex_home.path())?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
-    mock_device_code_token_success(&mock_server).await;
-    let id_token = encode_id_token(
-        &ChatGptIdTokenClaims::new()
-            .email("device@example.com")
-            .plan_type("pro")
-            .chatgpt_account_id(WORKSPACE_ID_DEVICE),
-    )?;
-    mock_device_code_oauth_token(&mock_server, &id_token).await;
-
-    let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
-    let resp: JSONRPCResponse = timeout(
+    let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::ChatgptDeviceCode {
-        login_id,
-        verification_url,
-        user_code,
-    } = login
-    else {
-        bail!("unexpected login response: {login:?}");
-    };
-    assert_eq!(verification_url, format!("{issuer}/codex/device"));
-    assert_eq!(user_code, "CODE-12345");
-
-    let note = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/login/completed"),
-    )
-    .await??;
-    let parsed: ServerNotification = note.try_into()?;
-    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
-        bail!("unexpected notification: {parsed:?}");
-    };
-    assert_eq!(payload.login_id, Some(login_id));
-    assert_eq!(payload.success, true);
-    assert_eq!(payload.error, None);
-
-    let note = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/updated"),
-    )
-    .await??;
-    let parsed: ServerNotification = note.try_into()?;
-    let ServerNotification::AccountUpdated(payload) = parsed else {
-        bail!("unexpected notification: {parsed:?}");
-    };
-    assert_eq!(payload.auth_mode, Some(AuthMode::Chatgpt));
-    assert_eq!(payload.plan_type, Some(AccountPlanType::Pro));
-    assert!(
-        codex_home.path().join("auth.json").exists(),
-        "auth.json should be created when device code login succeeds"
-    );
+    assert_eq!(err.error.message, DEVICE_CODE_UNSUPPORTED_MESSAGE);
     Ok(())
 }
 
 #[tokio::test]
 async fn login_account_chatgpt_device_code_failure_notifies_without_account_update() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mock_server = MockServer::start().await;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            requires_openai_auth: Some(true),
-            base_url: Some(format!("{}/v1", mock_server.uri())),
-            ..Default::default()
-        },
-    )?;
-    write_models_cache(codex_home.path())?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
-    mock_device_code_token_failure(&mock_server, /*status*/ 500).await;
-
-    let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
-    let resp: JSONRPCResponse = timeout(
+    let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
-        bail!("unexpected login response: {login:?}");
-    };
-
-    let note = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/login/completed"),
-    )
-    .await??;
-    let parsed: ServerNotification = note.try_into()?;
-    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
-        bail!("unexpected notification: {parsed:?}");
-    };
-    assert_eq!(payload.login_id, Some(login_id));
-    assert_eq!(payload.success, false);
-    assert!(
-        payload
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("device auth failed with status")),
-        "unexpected error: {:?}",
-        payload.error
-    );
-
-    let maybe_updated = timeout(
-        Duration::from_millis(500),
-        mcp.read_stream_until_notification_message("account/updated"),
-    )
-    .await;
-    assert!(
-        maybe_updated.is_err(),
-        "account/updated should not be emitted when device code login fails"
-    );
-    assert!(
-        !codex_home.path().join("auth.json").exists(),
-        "auth.json should not be created when device code login fails"
-    );
+    assert_eq!(err.error.message, DEVICE_CODE_UNSUPPORTED_MESSAGE);
     Ok(())
 }
 
 #[tokio::test]
 async fn login_account_chatgpt_device_code_can_be_cancelled() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mock_server = MockServer::start().await;
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            requires_openai_auth: Some(true),
-            base_url: Some(format!("{}/v1", mock_server.uri())),
-            ..Default::default()
-        },
-    )?;
-    write_models_cache(codex_home.path())?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 1).await;
-    mock_device_code_token_failure(&mock_server, /*status*/ 404).await;
-
-    let issuer = mock_server.uri();
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_API_KEY", None),
-            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
-        ],
-    )
-    .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
-    let resp: JSONRPCResponse = timeout(
+    let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let login: LoginAccountResponse = to_response(resp)?;
-    let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
-        bail!("unexpected login response: {login:?}");
-    };
-
-    let cancel_id = mcp
-        .send_cancel_login_account_request(CancelLoginAccountParams {
-            login_id: login_id.clone(),
-        })
-        .await?;
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await??;
-    let cancel: CancelLoginAccountResponse = to_response(cancel_resp)?;
-    assert_eq!(cancel.status, CancelLoginAccountStatus::Canceled);
-
-    let note = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("account/login/completed"),
-    )
-    .await??;
-    let parsed: ServerNotification = note.try_into()?;
-    let ServerNotification::AccountLoginCompleted(payload) = parsed else {
-        bail!("unexpected notification: {parsed:?}");
-    };
-    assert_eq!(payload.login_id, Some(login_id));
-    assert_eq!(payload.success, false);
-    assert!(
-        payload.error.is_some(),
-        "expected a non-empty error on device code cancel"
-    );
-
-    let maybe_updated = timeout(
-        Duration::from_millis(500),
-        mcp.read_stream_until_notification_message("account/updated"),
-    )
-    .await;
-    assert!(
-        maybe_updated.is_err(),
-        "account/updated should not be emitted when device code login is cancelled"
-    );
-    assert!(
-        !codex_home.path().join("auth.json").exists(),
-        "auth.json should not be created when device code login is cancelled"
-    );
+    assert_eq!(err.error.message, DEVICE_CODE_UNSUPPORTED_MESSAGE);
     Ok(())
 }
 
@@ -1340,8 +1130,8 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
         bail!("unexpected login response: {login:?}");
     };
     assert!(
-        auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost"),
-        "auth_url should contain a redirect_uri to localhost"
+        auth_url.contains("redirect_uri=http%3A%2F%2F127.0.0.1"),
+        "auth_url should contain a redirect_uri to the loopback callback"
     );
 
     let cancel_id = mcp
@@ -1387,18 +1177,11 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
-async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
+async fn login_account_chatgpt_uses_xai_oauth_authorize_endpoint() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    let mut mcp = TestAppServer::new_with_env(
-        codex_home.path(),
-        &[
-            (CLIENT_ID_OVERRIDE_ENV_VAR, Some("staging-client")),
-            (LOGIN_ISSUER_ENV_VAR, Some("https://auth.example.com")),
-        ],
-    )
-    .await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_login_account_chatgpt_request().await?;
@@ -1413,15 +1196,18 @@ async fn login_account_chatgpt_uses_debug_oauth_overrides() -> Result<()> {
         bail!("unexpected login response: {login:?}");
     };
     let auth_url = Url::parse(&auth_url)?;
-    assert_eq!(
-        auth_url.origin().ascii_serialization(),
-        "https://auth.example.com"
-    );
+    assert_eq!(auth_url.origin().ascii_serialization(), "https://auth.x.ai");
+    assert_eq!(auth_url.path(), "/oauth2/authorize");
     assert_eq!(
         auth_url
             .query_pairs()
             .find_map(|(key, value)| (key == "client_id").then_some(value.into_owned())),
-        Some("staging-client".to_string())
+        Some("b1a00492-073a-47ea-816f-4c329264a828".to_string())
+    );
+    assert!(
+        auth_url
+            .query_pairs()
+            .any(|(key, value)| key == "referrer" && value == "codex")
     );
 
     let cancel_id = mcp
@@ -1533,8 +1319,12 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
         bail!("unexpected login response: {login:?}");
     };
     assert!(
-        auth_url.contains(&format!("allowed_workspace_id={WORKSPACE_ID_ALLOWED}")),
-        "auth URL should include forced workspace"
+        auth_url.contains("auth.x.ai/oauth2/authorize"),
+        "auth URL should target xAI OAuth"
+    );
+    assert!(
+        !auth_url.contains("allowed_workspace_id"),
+        "xAI OAuth should not include ChatGPT workspace allowlists"
     );
     Ok(())
 }
@@ -1569,16 +1359,13 @@ async fn login_account_chatgpt_includes_forced_workspace_allowlist_query_param()
     let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
         bail!("unexpected login response: {login:?}");
     };
-    let auth_url = Url::parse(&auth_url)?;
-    let allowed_workspace_ids = auth_url
-        .query_pairs()
-        .filter_map(|(key, value)| (key == "allowed_workspace_id").then(|| value.into_owned()))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        allowed_workspace_ids,
-        vec![format!(
-            "{WORKSPACE_ID_ALLOWED},{WORKSPACE_ID_SECOND_ALLOWED}"
-        )]
+    assert!(
+        auth_url.contains("auth.x.ai/oauth2/authorize"),
+        "auth URL should target xAI OAuth"
+    );
+    assert!(
+        !auth_url.contains("allowed_workspace_id"),
+        "xAI OAuth should ignore ChatGPT workspace allowlists"
     );
     Ok(())
 }

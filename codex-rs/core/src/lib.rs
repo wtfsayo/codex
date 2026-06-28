@@ -16,6 +16,7 @@ mod realtime_prompt;
 mod responses_metadata;
 mod responses_retry;
 pub(crate) mod session;
+mod xai_responses;
 pub use responses_metadata::CodexResponsesMetadata;
 pub use session::SteerInputError;
 pub use turn_metadata::detached_memory_responses_metadata;

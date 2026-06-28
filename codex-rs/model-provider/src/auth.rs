@@ -145,7 +145,7 @@ pub(crate) fn resolve_provider_auth(
         ));
     }
 
-    if let Some(auth) = bearer_auth_for_provider(provider)? {
+    if let Some(auth) = bearer_auth_for_provider(auth, provider)? {
         return Ok(Arc::new(auth));
     }
 
@@ -224,8 +224,18 @@ fn should_bootstrap_chatgpt_agent_identity(
 }
 
 fn bearer_auth_for_provider(
+    auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<Option<BearerAuthProvider>> {
+    // Managed bearer auth (OAuth, login --with-api-key, etc.) takes precedence over
+    // provider env keys such as XAI_API_KEY.
+    if auth
+        .and_then(|auth| auth.get_token().ok())
+        .is_some_and(|token| !token.is_empty())
+    {
+        return Ok(None);
+    }
+
     if let Some(api_key) = provider.api_key()? {
         return Ok(Some(BearerAuthProvider::new(api_key)));
     }
@@ -404,6 +414,52 @@ mod tests {
             Err(err) => panic!("unexpected auth error: {err:?}"),
             Ok(_) => panic!("Bedrock API key auth should be rejected"),
         }
+    }
+
+    #[test]
+    fn xai_provider_prefers_managed_auth_over_env_api_key() {
+        struct EnvVarOverride {
+            key: &'static str,
+            previous: Option<std::ffi::OsString>,
+        }
+
+        impl EnvVarOverride {
+            fn set(key: &'static str, value: &str) -> Self {
+                let previous = std::env::var_os(key);
+                // SAFETY: test-only env mutation.
+                unsafe { std::env::set_var(key, value) };
+                Self { key, previous }
+            }
+        }
+
+        impl Drop for EnvVarOverride {
+            fn drop(&mut self) {
+                match &self.previous {
+                    Some(value) => {
+                        // SAFETY: test-only env restoration.
+                        unsafe { std::env::set_var(self.key, value) };
+                    }
+                    None => {
+                        // SAFETY: test-only env restoration.
+                        unsafe { std::env::remove_var(self.key) };
+                    }
+                }
+            }
+        }
+
+        let _env_guard = EnvVarOverride::set("XAI_API_KEY", "env-should-not-win");
+        let provider = ModelProviderInfo::create_xai_provider();
+        let auth = CodexAuth::from_api_key("managed-xai-token");
+
+        let resolved = resolve_provider_auth(Some(&auth), &provider).expect("auth should resolve");
+        let headers = resolved.to_auth_headers();
+
+        assert_eq!(
+            headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer managed-xai-token")
+        );
     }
 
     #[tokio::test]

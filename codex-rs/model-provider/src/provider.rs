@@ -24,6 +24,7 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::xai::catalog::static_model_catalog;
 
 /// Optional provider-backed features that Codex may expose at runtime.
 ///
@@ -248,6 +249,18 @@ impl ModelProvider for ConfiguredModelProvider {
         &self.info
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        if self.info.is_xai() {
+            ProviderCapabilities {
+                namespace_tools: false,
+                image_generation: false,
+                web_search: false,
+            }
+        } else {
+            ProviderCapabilities::default()
+        }
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
@@ -269,7 +282,8 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn account_state(&self) -> ProviderAccountResult {
-        let account = if self.info.requires_openai_auth {
+        let uses_managed_auth = self.info.requires_openai_auth || self.info.is_xai();
+        let account = if uses_managed_auth {
             self.auth_manager
                 .as_ref()
                 .and_then(|auth_manager| {
@@ -318,6 +332,10 @@ impl ModelProvider for ConfiguredModelProvider {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
+            )),
+            None if self.info.is_xai() => Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                static_model_catalog(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
@@ -601,6 +619,53 @@ mod tests {
         assert_eq!(
             provider.account_state(),
             Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
+        );
+    }
+
+    #[test]
+    fn xai_provider_returns_api_key_account_state_for_managed_auth() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_xai_provider(),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "xai-managed-token",
+            ))),
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Ok(ProviderAccountState {
+                account: Some(ProviderAccount::ApiKey),
+                requires_openai_auth: false,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn xai_provider_lists_hermes_curated_models() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_xai_provider(),
+            /*auth_manager*/ None,
+        );
+        let models_manager =
+            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let presets = models_manager
+            .list_models(RefreshStrategy::Offline)
+            .await
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .map(|preset| preset.model.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            presets,
+            vec![
+                "grok-build-0.1".to_string(),
+                "grok-composer-2.5-fast".to_string(),
+                "grok-4.3".to_string(),
+                "grok-4.20-0309-reasoning".to_string(),
+                "grok-4.20-0309-non-reasoning".to_string(),
+                "grok-4.20-multi-agent-0309".to_string(),
+            ]
         );
     }
 

@@ -450,11 +450,7 @@ impl ModelClient {
         self
     }
 
-    fn prompt_cache_key(
-        &self,
-        instructions: &str,
-        tools: Option<&[serde_json::Value]>,
-    ) -> String {
+    fn prompt_cache_key(&self, instructions: &str, tools: Option<&[serde_json::Value]>) -> String {
         crate::prompt_cache::resolve_prompt_cache_key(
             self.state.provider.info(),
             instructions,
@@ -856,8 +852,18 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        let reasoning = Self::build_reasoning(model_info, effort, summary);
-        let include = if reasoning.is_some() {
+        let is_xai = self.state.provider.info().is_xai();
+        let reasoning = if is_xai {
+            crate::xai_responses::build_xai_reasoning(
+                &model_info.slug,
+                effort.map(reasoning_effort_for_request),
+            )
+        } else {
+            Self::build_reasoning(model_info, effort, summary)
+        };
+        let include = if is_xai {
+            crate::xai_responses::xai_reasoning_include()
+        } else if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             Vec::new()
@@ -879,8 +885,12 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.prompt_cache_key(&instructions, tools.as_deref()));
-        let service_tier = model_info.service_tier_for_request(service_tier);
-        let request = ResponsesApiRequest {
+        let service_tier = if self.state.provider.info().is_xai() {
+            None
+        } else {
+            model_info.service_tier_for_request(service_tier)
+        };
+        let mut request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions,
             input,
@@ -896,6 +906,9 @@ impl ModelClient {
             text,
             client_metadata: Some(responses_metadata.client_metadata()),
         };
+        if is_xai {
+            crate::xai_responses::adapt_responses_request(&mut request);
+        }
         Ok(request)
     }
 
@@ -1125,9 +1138,9 @@ impl ModelClientSession {
                 }
                 add_responses_lite_header(&mut headers, use_responses_lite);
                 if crate::prompt_cache::is_xai_provider(self.client.state.provider.info()) {
-                    if let Ok(value) = HeaderValue::from_str(
-                        &responses_metadata.session_id.to_string(),
-                    ) {
+                    if let Ok(value) =
+                        HeaderValue::from_str(&responses_metadata.session_id.to_string())
+                    {
                         headers.insert("x-grok-conv-id", value);
                     }
                 }
@@ -1426,7 +1439,19 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = if self.client.state.provider.info().is_xai() {
+                let body = crate::xai_responses::encode_responses_request_for_xai(&request)?;
+                client
+                    .stream(
+                        body,
+                        options.extra_headers,
+                        options.compression,
+                        options.turn_state,
+                    )
+                    .await
+            } else {
+                client.stream_request(request, options).await
+            };
 
             match stream_result {
                 Ok(stream) => {

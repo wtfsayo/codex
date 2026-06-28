@@ -1146,6 +1146,13 @@ fn escape_xml_text(input: &str) -> String {
 }
 
 fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
+    if let Some(token) = auth
+        .and_then(|auth| auth.get_token().ok())
+        .filter(|token| !token.is_empty())
+    {
+        return Ok(token);
+    }
+
     if let Some(api_key) = provider.api_key()? {
         return Ok(api_key);
     }

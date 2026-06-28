@@ -168,7 +168,7 @@ async fn get_auth_status_with_api_key() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn personal_access_token_without_email_supports_auth_status_and_account_read() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path())?;
+    create_config_toml_custom_provider(codex_home.path(), /*requires_openai_auth*/ true)?;
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
