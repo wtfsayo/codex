@@ -1,6 +1,7 @@
 use base64::Engine;
 use codex_api::ApiError;
 use codex_api::TransportError;
+use http::StatusCode;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
@@ -60,6 +61,46 @@ pub fn extract_response_debug_context_from_api_error(error: &ApiError) -> Respon
     }
 }
 
+/// Returns whether an HTTP transport failure should trigger OAuth token refresh.
+///
+/// OpenAI-style backends typically return `401 Unauthorized`. xAI returns
+/// `403 Forbidden` with `unauthenticated:bad-credentials` when an OAuth access
+/// token has expired.
+pub fn transport_error_triggers_auth_recovery(transport: &TransportError) -> bool {
+    let TransportError::Http { status, body, .. } = transport else {
+        return false;
+    };
+    if *status == StatusCode::UNAUTHORIZED {
+        return true;
+    }
+    *status == StatusCode::FORBIDDEN
+        && body
+            .as_deref()
+            .is_some_and(response_body_indicates_invalid_credentials)
+}
+
+fn response_body_indicates_invalid_credentials(body: &str) -> bool {
+    if body.contains("bad-credentials") || body.contains("unauthenticated") {
+        return true;
+    }
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    parsed
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|code| code.contains("bad-credentials") || code.contains("unauthenticated"))
+        || parsed
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|code| {
+                code.contains("bad-credentials")
+                    || code.contains("unauthenticated")
+                    || code == "token_expired"
+                    || code == "invalid_api_key"
+            })
+}
+
 pub fn telemetry_transport_error_message(error: &TransportError) -> String {
     match error {
         TransportError::Http { status, .. } => format!("http {}", status.as_u16()),
@@ -92,6 +133,7 @@ mod tests {
     use super::extract_response_debug_context;
     use super::telemetry_api_error_message;
     use super::telemetry_transport_error_message;
+    use super::transport_error_triggers_auth_recovery;
     use codex_api::ApiError;
     use codex_api::TransportError;
     use http::HeaderMap;
@@ -162,5 +204,32 @@ mod tests {
             "invalid header value"
         );
         assert_eq!(telemetry_api_error_message(&stream), "socket closed");
+    }
+
+    #[test]
+    fn transport_error_triggers_auth_recovery_for_xai_bad_credentials() {
+        let transport = TransportError::Http {
+            status: StatusCode::FORBIDDEN,
+            url: Some("https://api.x.ai/v1/responses".to_string()),
+            headers: None,
+            body: Some(
+                r#"{"code":"unauthenticated:bad-credentials","error":"The OAuth2 access token could not be validated."}"#
+                    .to_string(),
+            ),
+        };
+
+        assert!(transport_error_triggers_auth_recovery(&transport));
+    }
+
+    #[test]
+    fn transport_error_does_not_trigger_auth_recovery_for_unrelated_forbidden() {
+        let transport = TransportError::Http {
+            status: StatusCode::FORBIDDEN,
+            url: Some("https://api.x.ai/v1/responses".to_string()),
+            headers: None,
+            body: Some(r#"{"code":"permission_denied","error":"not allowed"}"#.to_string()),
+        };
+
+        assert!(!transport_error_triggers_auth_recovery(&transport));
     }
 }

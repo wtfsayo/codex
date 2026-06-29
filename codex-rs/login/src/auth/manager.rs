@@ -191,6 +191,8 @@ struct ChatgptAuthState {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
+/// When xAI OAuth access tokens are opaque, refresh proactively on this cadence.
+const XAI_OAUTH_PROACTIVE_REFRESH_INTERVAL_MINUTES: i64 = 45;
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -2596,29 +2598,45 @@ impl AuthManager {
     }
 
     fn should_refresh_proactively(auth: &CodexAuth) -> bool {
-        let auth_dot_json = match auth {
+        let (auth_dot_json, fallback_interval) = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => match chatgpt_auth.current_auth_json() {
-                Some(auth_dot_json) => auth_dot_json,
+                Some(auth_dot_json) => (
+                    auth_dot_json,
+                    chrono::Duration::days(TOKEN_REFRESH_INTERVAL),
+                ),
                 None => return false,
             },
             CodexAuth::XaiOAuth(xai_auth) => match xai_auth.current_auth_json() {
-                Some(auth_dot_json) => auth_dot_json,
+                Some(auth_dot_json) => (
+                    auth_dot_json,
+                    chrono::Duration::minutes(XAI_OAUTH_PROACTIVE_REFRESH_INTERVAL_MINUTES),
+                ),
                 None => return false,
             },
             _ => return false,
         };
-        if let Some(tokens) = auth_dot_json.tokens.as_ref()
-            && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
-        {
-            return expires_at
-                <= Utc::now()
-                    + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);
+        if let Some(tokens) = auth_dot_json.tokens.as_ref() {
+            if let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
+                && expires_at
+                    <= Utc::now()
+                        + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES)
+            {
+                return true;
+            }
+            if !tokens.id_token.raw_jwt.is_empty()
+                && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.id_token.raw_jwt)
+                && expires_at
+                    <= Utc::now()
+                        + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES)
+            {
+                return true;
+            }
         }
         let last_refresh = match auth_dot_json.last_refresh {
             Some(last_refresh) => last_refresh,
             None => return false,
         };
-        last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL)
+        last_refresh < Utc::now() - fallback_interval
     }
 
     async fn refresh_external_auth(

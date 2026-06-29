@@ -222,6 +222,40 @@ fn adapt_responses_request_applies_input_and_tool_sanitization() {
     assert_eq!(request.tools.as_ref().unwrap()[0]["type"], "function");
     assert!(!request.store);
     assert!(request.service_tier.is_none());
+    assert_eq!(request.tool_choice, "auto");
+}
+
+#[test]
+fn adapt_responses_request_clears_tool_choice_when_tools_are_removed() {
+    let mut request = ResponsesApiRequest {
+        model: "grok-4.3".to_string(),
+        instructions: String::new(),
+        input: vec![],
+        tools: Some(vec![serde_json::json!({
+            "type": "namespace",
+            "name": "codex",
+            "tools": []
+        })]),
+        tool_choice: "auto".to_string(),
+        parallel_tool_calls: true,
+        reasoning: None,
+        store: true,
+        stream: true,
+        include: vec![],
+        service_tier: None,
+        prompt_cache_key: None,
+        text: None,
+        client_metadata: None,
+    };
+
+    adapt_responses_request(&mut request);
+
+    assert!(request.tools.is_none());
+    assert!(request.tool_choice.is_empty());
+
+    let body = encode_responses_request_for_xai(&request).expect("encode xAI request");
+    assert!(body.get("tool_choice").is_none());
+    assert!(body.get("parallel_tool_calls").is_none());
 }
 
 #[test]
@@ -264,6 +298,7 @@ fn encode_responses_request_for_xai_matches_hermes_user_input_shape() {
         body["include"],
         serde_json::json!(["reasoning.encrypted_content"])
     );
+    assert!(body.get("tool_choice").is_none());
 }
 
 #[test]

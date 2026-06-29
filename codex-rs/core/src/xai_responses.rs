@@ -69,6 +69,12 @@ pub fn encode_responses_request_for_xai(
     if let Some(input) = body.get_mut("input") {
         *input = Value::Array(wire_input);
     }
+    if request.tools.is_none() {
+        if let Some(body) = body.as_object_mut() {
+            body.remove("tool_choice");
+            body.remove("parallel_tool_calls");
+        }
+    }
     Ok(body)
 }
 
@@ -80,6 +86,9 @@ pub fn adapt_responses_request(request: &mut ResponsesApiRequest) {
         .take()
         .map(|tools| sanitize_tools_for_xai(&tools))
         .filter(|tools| !tools.is_empty());
+    if request.tools.is_none() {
+        request.tool_choice.clear();
+    }
     request.store = false;
     request.service_tier = None;
 }
