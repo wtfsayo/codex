@@ -30,6 +30,17 @@ fn plain_lines(text: &Text<'_>) -> Vec<String> {
 }
 
 #[test]
+fn mermaid_closed_fence_renders_a_diagram() {
+    let source = "```mermaid\nflowchart LR\n  A[Build] --> B[Test]\n```\n";
+    let rendered = plain_lines(&render_markdown_text_with_width(source, Some(80))).join("\n");
+    assert!(rendered.contains('┌'), "expected diagram boxes, got {rendered}");
+    assert!(rendered.contains("Build"));
+    assert!(rendered.contains("Test"));
+    assert!(!rendered.contains("flowchart LR"));
+    assert_snapshot!(rendered);
+}
+
+#[test]
 fn bare_url_with_tilde_keeps_complete_hyperlink() {
     let destination = "https://www.cs.tufts.edu/~nr/cs257/archive/olin-shivers/dissertation.pdf";
     let lines = render_markdown_lines_with_width_and_cwd(

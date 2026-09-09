@@ -11,6 +11,12 @@
 
 use std::time::Instant;
 
+use pulldown_cmark::CodeBlockKind;
+use pulldown_cmark::Event;
+use pulldown_cmark::Parser;
+use pulldown_cmark::Tag;
+use pulldown_cmark::TagEnd;
+
 use crate::table_detect::FenceKind;
 use crate::table_detect::FenceTracker;
 use crate::table_detect::is_table_delimiter_line;
@@ -167,6 +173,70 @@ impl TableHoldbackScanner {
 fn table_candidate_text(line: &str) -> Option<&str> {
     let stripped = strip_blockquote_prefix(line).trim();
     parse_table_segments(stripped).map(|_| stripped)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum FenceHoldback {
+    Mermaid { start: usize },
+    OpenMarkdown { start: usize },
+}
+
+impl FenceHoldback {
+    pub(super) fn source_start(self) -> usize {
+        match self {
+            Self::Mermaid { start } | Self::OpenMarkdown { start } => start,
+        }
+    }
+}
+
+/// Markdown wrappers can expose nested diagrams when table unwrapping removes
+/// them. Keep open wrappers mutable, then release ordinary code once closed.
+pub(super) fn first_transforming_fence(source: &str) -> Option<FenceHoldback> {
+    let mut markdown_fence = None;
+    for (event, range) in Parser::new(source).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                let language = info.split([',', ' ', '\t']).next().unwrap_or_default();
+                let start = source[..range.start]
+                    .rfind('\n')
+                    .map_or(0, |index| index + 1);
+                if language.eq_ignore_ascii_case("mermaid") {
+                    return Some(FenceHoldback::Mermaid { start });
+                }
+                if language.eq_ignore_ascii_case("md") || language.eq_ignore_ascii_case("markdown")
+                {
+                    let body_end = source[range.start..range.end]
+                        .find('\n')
+                        .map_or(range.end, |offset| range.start + offset + 1);
+                    markdown_fence = Some((start, body_end));
+                }
+            }
+            Event::Text(_) => {
+                if let Some((_, body_end)) = &mut markdown_fence {
+                    *body_end = range.end;
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some((start, body_end)) = markdown_fence.take() {
+                    if body_end == range.end {
+                        return Some(FenceHoldback::OpenMarkdown { start });
+                    }
+                    let original = &source[start..range.end];
+                    let normalized = crate::markdown::unwrap_markdown_fences(original);
+                    if normalized != original
+                        && Parser::new(&normalized).any(|event| {
+                            matches!(event, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+                                if info.split([',', ' ', '\t']).next().is_some_and(|language| language.eq_ignore_ascii_case("mermaid")))
+                        })
+                    {
+                        return Some(FenceHoldback::Mermaid { start });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A source line annotated with whether it falls inside a fenced code block.

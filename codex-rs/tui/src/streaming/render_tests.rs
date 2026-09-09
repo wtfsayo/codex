@@ -110,6 +110,17 @@ fn incremental_render_keeps_final_block_mutable_and_matches_full_render() {
 }
 
 #[test]
+fn incremental_nested_fences_preserve_preceding_block_spacing() {
+    for source in [
+        "Before.\n\n> ```rust\n> let answer = 42;\n> ```\n\nAfter.\n",
+        "Before.\n\n- ```rust\n  let answer = 42;\n  ```\n\nAfter.\n",
+    ] {
+        let chunks = source.split_inclusive('\n').collect::<Vec<_>>();
+        assert_rich_stream_matches_full_render(&chunks, /*width*/ Some(80));
+    }
+}
+
+#[test]
 fn incremental_file_citations_preserve_metadata_unicode_and_markdown() {
     let cwd = test_cwd();
     let rendered_cases = [

@@ -74,6 +74,10 @@ mod streaming;
 mod table_key_value;
 mod web_links;
 
+#[cfg(test)]
+#[path = "markdown_render/mermaid_tests.rs"]
+mod mermaid_tests;
+
 use file_citations::FileCitations;
 use local_links::is_local_path_like_link;
 use local_links::render_local_link_target;
@@ -388,6 +392,7 @@ where
     in_code_block: bool,
     code_block_lang: Option<String>,
     code_block_buffer: String,
+    code_block_body_end: usize,
     wrap_width: Option<usize>,
     cwd: Option<PathBuf>,
     is_hidden_link_destination: &'policy dyn Fn(&str) -> bool,
@@ -429,6 +434,7 @@ where
             in_code_block: false,
             code_block_lang: None,
             code_block_buffer: String::new(),
+            code_block_body_end: 0,
             wrap_width,
             cwd: cwd.map(Path::to_path_buf),
             is_hidden_link_destination,
@@ -454,8 +460,13 @@ where
         self.prepare_for_event(&event);
         match event {
             Event::Start(tag) => self.start_tag(tag, range),
-            Event::End(tag) => self.end_tag(tag),
-            Event::Text(text) => self.text(text),
+            Event::End(tag) => self.end_tag(tag, range),
+            Event::Text(text) => {
+                if self.in_code_block {
+                    self.code_block_body_end = range.end;
+                }
+                self.text(text);
+            }
             Event::Code(code) => self.code(code),
             Event::SoftBreak => self.soft_break(),
             Event::HardBreak => self.hard_break(),
@@ -524,12 +535,12 @@ where
         }
     }
 
-    fn end_tag(&mut self, tag: TagEnd) {
+    fn end_tag(&mut self, tag: TagEnd, range: Range<usize>) {
         match tag {
             TagEnd::Paragraph => self.end_paragraph(),
             TagEnd::Heading(_) => self.end_heading(),
             TagEnd::BlockQuote => self.end_blockquote(),
-            TagEnd::CodeBlock => self.end_codeblock(),
+            TagEnd::CodeBlock => self.end_codeblock(range),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
                 self.flush_current_line();
@@ -866,6 +877,7 @@ where
             .map(std::string::ToString::to_string);
         self.code_block_lang = lang;
         self.code_block_buffer.clear();
+        self.code_block_body_end = 0;
 
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
@@ -875,12 +887,27 @@ where
         self.needs_newline = true;
     }
 
-    fn end_codeblock(&mut self) {
+    fn end_codeblock(&mut self, range: Range<usize>) {
         // If we buffered code for a known language, syntax-highlight it now.
         if let Some(lang) = self.code_block_lang.take() {
             let code = std::mem::take(&mut self.code_block_buffer);
             if !code.is_empty() {
-                let highlighted = highlight_code_to_lines(&code, &lang);
+                // CommonMark synthesizes End for unterminated fences, too. A real closer
+                // extends the block range beyond the last code-text event, even at EOF.
+                let diagram = if lang.eq_ignore_ascii_case("mermaid")
+                    && self.code_block_body_end < range.end
+                {
+                    let indent = Self::spans_display_width(
+                        &self.prefix_spans(/*pending_marker_line*/ false),
+                    );
+                    crate::mermaid::render(
+                        &code,
+                        self.wrap_width.map(|width| width.saturating_sub(indent)),
+                    )
+                } else {
+                    None
+                };
+                let highlighted = diagram.unwrap_or_else(|| highlight_code_to_lines(&code, &lang));
                 for hl_line in highlighted {
                     self.push_line(Line::default());
                     for span in hl_line.spans {

@@ -1,0 +1,16 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+expression: "render(source, 80)"
+---
+Before.
+
+┌──────────────┐
+│ 入口 Request │
+└───────┬──────┘
+        │
+        ▼next
+┌──────────────┐
+│ Reply & done │
+└──────────────┘
+
+After diagram.

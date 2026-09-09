@@ -39,7 +39,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::{self};
 use crate::inline_visualization::InlineVisualizationContext;
-use crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations;
 use crate::style::proposed_plan_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::prefix_hyperlink_lines;
@@ -53,8 +52,10 @@ use std::time::Instant;
 use super::StreamState;
 use super::render::StreamingRender;
 use super::render::render_source;
+use super::table_holdback::FenceHoldback;
 use super::table_holdback::TableHoldbackScanner;
 use super::table_holdback::TableHoldbackState;
+use super::table_holdback::first_transforming_fence;
 #[cfg(test)]
 use super::table_holdback::table_holdback_state;
 
@@ -89,6 +90,9 @@ struct StreamCore {
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
     holdback_scanner: TableHoldbackScanner,
+    /// A diagram replaces its code lines when closed. Retain its tail in both
+    /// render modes so toggling raw Markdown cannot commit the interim source.
+    transforming_fence: Option<FenceHoldback>,
 }
 
 struct StablePrefixLenCache {
@@ -96,6 +100,7 @@ struct StablePrefixLenCache {
     source_start: usize,
     /// Width that produced `stable_prefix_len`.
     width: Option<usize>,
+    render_mode: HistoryRenderMode,
     /// Rendered line count for the committed prefix before `source_start` at `width`.
     ///
     /// The streaming controller uses this to avoid repeatedly re-rendering the
@@ -121,6 +126,7 @@ impl StreamCore {
             render_mode,
             stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
+            transforming_fence: None,
         }
     }
 
@@ -144,6 +150,11 @@ impl StreamCore {
             let source = self.state.collector.committed_source();
             let committed_source = &source[range];
             self.holdback_scanner.push_source_chunk(committed_source);
+            if !matches!(self.transforming_fence, Some(FenceHoldback::Mermaid { .. }))
+                && committed_source.contains(['`', '~'])
+            {
+                self.transforming_fence = first_transforming_fence(source);
+            }
             self.render.append(
                 source,
                 committed_source,
@@ -291,6 +302,7 @@ impl StreamCore {
         self.emitted_stable_len = 0;
         self.stable_prefix_len_cache = None;
         self.holdback_scanner.reset();
+        self.transforming_fence = None;
     }
 
     fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
@@ -391,17 +403,26 @@ impl StreamCore {
     /// stable. This is the core decision point for the holdback mechanism.
     fn active_tail_budget_lines(&mut self) -> usize {
         if self.render_mode == HistoryRenderMode::Raw {
-            return 0;
+            return self.transforming_fence.map_or(0, |fence| {
+                self.tail_budget_from_source_start(fence.source_start())
+            });
         }
         let scan_start = Instant::now();
         let holdback_state = self.holdback_scanner.state();
-        let tail_budget = match holdback_state {
+        let table_start = match holdback_state {
             TableHoldbackState::Confirmed { table_start: start }
             | TableHoldbackState::PendingHeader {
                 header_start: start,
-            } => self.tail_budget_from_source_start(start),
-            TableHoldbackState::None => 0,
+            } => Some(start),
+            TableHoldbackState::None => None,
         };
+        let tail_budget = self
+            .transforming_fence
+            .into_iter()
+            .map(FenceHoldback::source_start)
+            .chain(table_start)
+            .min()
+            .map_or(0, |start| self.tail_budget_from_source_start(start));
         tracing::trace!(
             state = ?holdback_state,
             tail_budget,
@@ -434,6 +455,7 @@ impl StreamCore {
         if let Some(cache) = &self.stable_prefix_len_cache
             && cache.source_start == source_start
             && cache.width == self.width
+            && cache.render_mode == self.render_mode
         {
             tracing::trace!(
                 source_start,
@@ -446,10 +468,11 @@ impl StreamCore {
 
         let render_start = Instant::now();
         let source = self.state.collector.committed_source();
-        let stable_prefix_render = render_markdown_agent_with_links_cwd_and_visualizations(
+        let stable_prefix_render = render_source(
             &source[..source_start.min(source.len())],
             self.width,
-            Some(self.cwd.as_path()),
+            self.cwd.as_path(),
+            self.render_mode,
             self.inline_visualization_context.as_ref(),
         );
         let stable_prefix_len = stable_prefix_render.len();
@@ -463,6 +486,7 @@ impl StreamCore {
         self.stable_prefix_len_cache = Some(StablePrefixLenCache {
             source_start,
             width: self.width,
+            render_mode: self.render_mode,
             stable_prefix_len,
         });
         stable_prefix_len
@@ -755,6 +779,10 @@ impl PlanStreamController {
         out_lines
     }
 }
+
+#[cfg(test)]
+#[path = "mermaid_tests.rs"]
+mod mermaid_tests;
 
 #[cfg(test)]
 mod tests {

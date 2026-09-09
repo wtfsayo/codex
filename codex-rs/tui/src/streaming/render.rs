@@ -13,6 +13,10 @@ use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
 use crate::render::highlight::syntax_theme_revision;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
+use pulldown_cmark::CodeBlockKind;
+use pulldown_cmark::Event;
+use pulldown_cmark::Parser;
+use pulldown_cmark::Tag;
 use ratatui::text::Line;
 use std::path::Path;
 
@@ -146,6 +150,33 @@ impl StreamingRender {
         }
 
         let pending_source = &raw_source[self.stable_source_len..];
+        if self.stable_source_len > 0 && pending_source.contains(['`', '~']) {
+            let mut depth = 0usize;
+            let has_nested_fence = Parser::new(pending_source).any(|event| match event {
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_))) if depth > 0 => true,
+                Event::Start(_) => {
+                    depth += 1;
+                    false
+                }
+                Event::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    false
+                }
+                _ => false,
+            });
+            if has_nested_fence {
+                // Container code-block spacing depends on preceding writer output.
+                // Rendering that suffix alone loses the quote/list separator rows.
+                self.recompute(
+                    raw_source,
+                    width,
+                    cwd,
+                    render_mode,
+                    inline_visualization_context,
+                );
+                return;
+            }
+        }
         let theme_revision = syntax_theme_revision();
         let pending =
             render_streaming_markdown_agent_with_links_and_cwd(pending_source, width, Some(cwd));

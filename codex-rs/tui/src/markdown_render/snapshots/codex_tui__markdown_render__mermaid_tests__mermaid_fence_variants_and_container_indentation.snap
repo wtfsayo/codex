@@ -1,0 +1,9 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+expression: listed
+---
+- Pipeline
+
+  ┌───────┐    ┌──────┐
+  │ Build ├───▶│ Test │
+  └───────┘    └──────┘
