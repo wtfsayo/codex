@@ -7,6 +7,26 @@ fn render(source: &str, width: usize) -> String {
 }
 
 #[test]
+fn mermaid_stream_does_not_preview_a_fence_ended_by_its_container() {
+    let source = "> ```mermaid\n> flowchart LR\n> A --> B\n\nOutside the unfinished fence.\n";
+    let streamed = super::render_streaming_markdown_lines_with_width_and_cwd(
+        source,
+        Some(80),
+        /*cwd*/ None,
+        &|_| false,
+        super::RenderPhase::Streaming,
+    );
+    let output = streamed
+        .lines
+        .iter()
+        .map(|line| line.line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(output, render(source, 80));
+    assert!(output.contains("A --> B"));
+}
+
+#[test]
 fn mermaid_diagram_families() {
     let diagrams = [
         "flowchart TD\nA[Request] --> B{Allowed?}\nB -->|yes| C[Run]\nB -->|no| D[Reject]",

@@ -9,6 +9,7 @@ use super::FileCitations;
 use super::HyperlinkLine;
 use super::Options;
 use super::Parser;
+use super::RenderPhase;
 use super::Tag;
 use super::Writer;
 use std::ops::Range;
@@ -35,6 +36,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
     is_hidden_link_destination: &dyn Fn(&str) -> bool,
+    render_phase: RenderPhase,
 ) -> StreamingMarkdownRender {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -50,6 +52,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         first_is_html: false,
     };
     let mut writer = Writer::new(input, parser, width, cwd, is_hidden_link_destination);
+    writer.render_phase = render_phase;
     writer.run();
     StreamingMarkdownRender {
         lines: writer.text,

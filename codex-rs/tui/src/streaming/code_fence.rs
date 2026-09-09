@@ -51,6 +51,8 @@ impl OpenCodeFence {
             .filter(|language| !language.is_empty())?;
         // Retain at most one bounded language token, never the streamed code itself.
         if language.len() > MAX_HIGHLIGHT_LINE_BYTES
+            // Diagrams reflow earlier rows as statements arrive.
+            || language.eq_ignore_ascii_case("mermaid")
             || has_possible_closing_line(code, marker, marker_len)
         {
             return None;

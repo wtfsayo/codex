@@ -80,15 +80,19 @@ impl StreamingRender {
                 self.has_reference_link_definition = rendered.has_reference_link_definition;
                 rendered.lines
             }
-            _ => {
+            (HistoryRenderMode::Rich, _) => {
                 self.has_reference_link_definition = false;
-                render_source(
+                render_markdown_agent_with_links_cwd_and_visualizations(
                     source,
                     width,
-                    cwd,
-                    render_mode,
+                    Some(cwd),
                     inline_visualization_context,
+                    crate::markdown_render::RenderPhase::Streaming,
                 )
+            }
+            (HistoryRenderMode::Raw, _) => {
+                self.has_reference_link_definition = false;
+                plain_hyperlink_lines(raw_lines_from_source(source))
             }
         };
         self.stable_source_len = 0;
@@ -241,6 +245,7 @@ pub(super) fn render_source(
             width,
             Some(cwd),
             inline_visualization_context,
+            crate::markdown_render::RenderPhase::Final,
         ),
         HistoryRenderMode::Raw => plain_hyperlink_lines(raw_lines_from_source(source)),
     }

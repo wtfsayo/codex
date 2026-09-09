@@ -91,6 +91,13 @@ const TABLE_CELL_PADDING: usize = 1;
 const TABLE_HEADER_SEPARATOR_CHAR: char = '━';
 const TABLE_BODY_SEPARATOR_CHAR: char = '─';
 
+/// Live output can preview an open diagram; saved output requires its closing fence.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenderPhase {
+    Streaming,
+    Final,
+}
+
 struct MarkdownStyles {
     h1: Style,
     h2: Style,
@@ -393,6 +400,7 @@ where
     code_block_lang: Option<String>,
     code_block_buffer: String,
     code_block_body_end: usize,
+    render_phase: RenderPhase,
     wrap_width: Option<usize>,
     cwd: Option<PathBuf>,
     is_hidden_link_destination: &'policy dyn Fn(&str) -> bool,
@@ -435,6 +443,7 @@ where
             code_block_lang: None,
             code_block_buffer: String::new(),
             code_block_body_end: 0,
+            render_phase: RenderPhase::Final,
             wrap_width,
             cwd: cwd.map(Path::to_path_buf),
             is_hidden_link_destination,
@@ -895,7 +904,9 @@ where
                 // CommonMark synthesizes End for unterminated fences, too. A real closer
                 // extends the block range beyond the last code-text event, even at EOF.
                 let diagram = if lang.eq_ignore_ascii_case("mermaid")
-                    && self.code_block_body_end < range.end
+                    && (self.code_block_body_end < range.end
+                        || (self.render_phase == RenderPhase::Streaming
+                            && range.end == self.input.len()))
                 {
                     let indent = Self::spans_display_width(
                         &self.prefix_spans(/*pending_marker_line*/ false),

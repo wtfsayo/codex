@@ -548,6 +548,7 @@ impl HistoryCell for AgentMarkdownCell {
                 Some(wrap_width),
                 Some(self.cwd.as_path()),
                 self.inline_visualization_context.as_ref(),
+                crate::markdown_render::RenderPhase::Final,
             );
             let lines = if self.spoken_artifacts {
                 let mut lines = lines;

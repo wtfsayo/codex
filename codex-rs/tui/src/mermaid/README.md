@@ -1,6 +1,9 @@
 # Native Mermaid renderer
 
-Completed `mermaid` code fences render automatically as terminal diagrams.
+`mermaid` code fences preview valid diagram content as complete source lines
+arrive, then render permanently once closed. Incomplete diagram statements or
+open subgraphs remain source until their syntax is complete. An interrupted
+message with an unclosed fence preserves its original source in history.
 Press Alt+R to toggle the original Markdown. Unsupported or oversized diagrams
 keep the ordinary code-block presentation.
 

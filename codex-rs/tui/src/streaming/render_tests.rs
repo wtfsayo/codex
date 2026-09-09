@@ -18,6 +18,75 @@ fn test_cwd() -> PathBuf {
     std::env::temp_dir()
 }
 
+#[test]
+fn mermaid_preview_survives_source_wide_recomputes() {
+    let cwd = test_cwd();
+    let context = InlineVisualizationContext::new(&cwd, ThreadId::new()).unwrap();
+    for prefix in [
+        "",
+        "[ref]: https://example.com\n\n",
+        "::codex-inline-vis{file=\"missing.html\"}\n\n",
+    ] {
+        let mut render = StreamingRender::new();
+        let mut source = prefix.to_owned();
+        render.append(
+            &source,
+            prefix,
+            Some(80),
+            &cwd,
+            HistoryRenderMode::Rich,
+            Some(&context),
+        );
+        for chunk in [
+            "```mermaid\nflowchart LR\nA[Input] --> B[Output]\n",
+            "B --> C[Done]\n",
+        ] {
+            source.push_str(chunk);
+            render.append(
+                &source,
+                chunk,
+                Some(80),
+                &cwd,
+                HistoryRenderMode::Rich,
+                Some(&context),
+            );
+            let expected = render_source(
+                &format!("{source}```\n"),
+                Some(80),
+                &cwd,
+                HistoryRenderMode::Rich,
+                Some(&context),
+            );
+            assert_eq!(render.lines, expected);
+            render.recompute(
+                &source,
+                Some(100),
+                &cwd,
+                HistoryRenderMode::Rich,
+                Some(&context),
+            );
+            assert_eq!(
+                render.lines,
+                render_source(
+                    &format!("{source}```\n"),
+                    Some(100),
+                    &cwd,
+                    HistoryRenderMode::Rich,
+                    Some(&context)
+                )
+            );
+            // Reset width before the next append, as the controller does on resize.
+            render.recompute(
+                &source,
+                Some(80),
+                &cwd,
+                HistoryRenderMode::Rich,
+                Some(&context),
+            );
+        }
+    }
+}
+
 fn append(
     render: &mut StreamingRender,
     source: &mut String,

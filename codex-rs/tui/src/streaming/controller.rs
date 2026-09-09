@@ -90,7 +90,7 @@ struct StreamCore {
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
     holdback_scanner: TableHoldbackScanner,
-    /// A diagram replaces its code lines when closed. Retain its tail in both
+    /// A diagram reflows as statements arrive. Retain its tail in both
     /// render modes so toggling raw Markdown cannot commit the interim source.
     transforming_fence: Option<FenceHoldback>,
 }

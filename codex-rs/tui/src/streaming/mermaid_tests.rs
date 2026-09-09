@@ -17,6 +17,124 @@ fn drain(controller: &mut StreamController, emitted: &mut Vec<String>) {
 }
 
 #[test]
+fn mermaid_stream_progressively_renders_before_closing_fence() {
+    let cwd = std::env::temp_dir();
+    let mut snapshots = Vec::new();
+    for (opening, first, next, closing) in [
+        (
+            "```mermaid\nflowchart LR\n",
+            "A[入口] --> B[Gateway]\n",
+            "B --> C[Reply]\n",
+            "```\n",
+        ),
+        (
+            "> ~~~~MeRmAiD title=Flow\n> flowchart LR\n",
+            "> A[入口] --> B[Gateway]\n",
+            "> B --> C[Reply]\n",
+            "> ~~~~\n",
+        ),
+        (
+            "- ````mermaid\n  flowchart LR\n",
+            "  A[入口] --> B[Gateway]\n",
+            "  B --> C[Reply]\n",
+            "  ````\n",
+        ),
+        (
+            "```mermaid\ngantt\naxisFormat %b %d\nexcludes weekends\n",
+            "Build :a, 2026-09-11, 2d\n",
+            "Ship :milestone, after a, 0d\n",
+            "```\n",
+        ),
+        (
+            "```mermaid\nsequenceDiagram\n",
+            "User->>API: Request\n",
+            "API-->>User: Reply\n",
+            "```\n",
+        ),
+        (
+            "```mermaid\nflowchart LR\n",
+            "subgraph Clients\nA[Web]\nend\n",
+            "subgraph Backend\nB[API]\nend\nA --> B\n",
+            "```\n",
+        ),
+    ] {
+        let mut controller =
+            StreamController::new(/*width*/ Some(100), &cwd, HistoryRenderMode::Rich);
+        let mut emitted = Vec::new();
+        let mut source = format!("{opening}{first}");
+        controller.push(&source);
+        drain(&mut controller, &mut emitted);
+        assert!(emitted.is_empty());
+        let expected = render_source(
+            &format!("{source}{closing}"),
+            Some(100),
+            &cwd,
+            HistoryRenderMode::Rich,
+            /*inline_visualization_context*/ None,
+        );
+        assert_eq!(
+            controller.current_tail_lines(),
+            expected,
+            "first statement must render before the closing fence"
+        );
+        snapshots.push(plain_lines(&expected).join("\n"));
+        let before = controller.current_tail_lines();
+        for line in next.split_inclusive('\n') {
+            let before_line = controller.current_tail_lines();
+            for c in line.chars() {
+                controller.push(&c.to_string());
+                if c != '\n' {
+                    assert_eq!(controller.current_tail_lines(), before_line);
+                }
+            }
+        }
+        source.push_str(next);
+        drain(&mut controller, &mut emitted);
+        assert!(emitted.is_empty());
+        let expected = render_source(
+            &format!("{source}{closing}"),
+            Some(100),
+            &cwd,
+            HistoryRenderMode::Rich,
+            /*inline_visualization_context*/ None,
+        );
+        assert_eq!(
+            controller.current_tail_lines(),
+            expected,
+            "new statements must update the preview"
+        );
+        assert_ne!(controller.current_tail_lines(), before);
+        snapshots.push(plain_lines(&expected).join("\n"));
+        let (cell, original) = controller.finalize();
+        assert_eq!(original.as_deref(), Some(source.as_str()));
+        assert_eq!(
+            cell.unwrap()
+                .transcript_lines(u16::MAX)
+                .iter()
+                .map(|line| line.to_string().chars().skip(2).collect::<String>())
+                .collect::<Vec<_>>(),
+            plain_lines(&render_source(
+                &source,
+                Some(100),
+                &cwd,
+                HistoryRenderMode::Rich,
+                /*inline_visualization_context*/ None
+            ))
+            .into_iter()
+            .map(|line| line.trim_end().to_owned())
+            .collect::<Vec<_>>()
+        );
+    }
+    let snapshot = snapshots.join("\n\n");
+    let snapshot = snapshot
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(snapshot);
+}
+
+#[test]
 fn mermaid_stream_keeps_source_mutable_through_close_and_following_prose() {
     let cwd = std::env::temp_dir();
     for source in [
@@ -47,13 +165,14 @@ fn mermaid_stream_keeps_source_mutable_through_close_and_following_prose() {
             visible.extend(plain_lines(&controller.current_tail_lines()));
             assert_eq!(
                 visible,
-                plain_lines(&render_source(
-                    &committed,
-                    /*width*/ Some(80),
-                    &cwd,
-                    HistoryRenderMode::Rich,
-                    /*inline_visualization_context*/ None,
-                )),
+                plain_lines(
+                    &crate::markdown::render_streaming_markdown_agent_with_links_and_cwd(
+                        &committed,
+                        /*width*/ Some(80),
+                        Some(&cwd),
+                    )
+                    .lines
+                ),
                 "stream diverged after {committed:?}",
             );
         }
@@ -103,8 +222,32 @@ fn mermaid_stream_resize_and_raw_toggle_preserve_diagram_and_original_source() {
             plain_lines(&controller.current_tail_lines()),
             open.lines().map(str::to_owned).collect::<Vec<_>>(),
         );
-        controller.push("```\n");
         let source = format!("{open}```\n");
+        for width in [30, 120] {
+            controller.set_width(Some(width));
+            for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
+                controller.set_render_mode(mode);
+                drain(&mut controller, &mut emitted);
+                assert!(emitted.is_empty());
+                let expected_source = if mode == HistoryRenderMode::Rich {
+                    &source
+                } else {
+                    open
+                };
+                assert_eq!(
+                    controller.current_tail_lines(),
+                    render_source(
+                        expected_source,
+                        Some(width),
+                        &cwd,
+                        mode,
+                        /*inline_visualization_context*/ None
+                    ),
+                    "open preview must survive resize and raw toggle"
+                );
+            }
+        }
+        controller.push("```\n");
         for width in [30, 120] {
             controller.set_width(Some(width));
             for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
