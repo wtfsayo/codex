@@ -26,7 +26,7 @@ fn mermaid_stream_keeps_source_mutable_through_close_and_following_prose() {
         "Before.\n\n1. Diagram\n\n   ```mermaid\n   graph TD\n   A[Input] --> B[Output]\n   ```\n\nAfter.\n",
         "Before.\n\n````markdown\n```mermaid\ngraph TD\nA[Input] --> B[Output]\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n````\n\nAfter.\n",
         "Before.\n\n```mermaid\nflowchart LR\nsubgraph Clients\nA[Input]\nend\nsubgraph Backend\nB[Output]\nend\nA --> B\n```\n\nAfter.\n",
-        "Before.\n\n```mermaid\ngantt\naxisFormat %b %d\nBuild :a, 2026-09-09, 2d\nShip :milestone, after a, 0d\n```\n\nAfter.\n",
+        "Before.\n\n```mermaid\ngantt\naxisFormat %b %d\nexcludes weekends\nBuild :a, 2026-09-11, 2d\nShip :milestone, after a, 0d\n```\n\nAfter.\n",
     ] {
         let mut controller =
             StreamController::new(/*width*/ Some(80), &cwd, HistoryRenderMode::Rich);
@@ -88,7 +88,7 @@ fn mermaid_stream_resize_and_raw_toggle_preserve_diagram_and_original_source() {
     for open in [
         "```mermaid\ngraph LR\nA[Incoming message] --> B[Gateway]\n",
         "```mermaid\nflowchart LR\nsubgraph Clients\nA[Input]\nend\nsubgraph Backend\nB[Output]\nend\nA --> B\n",
-        "```mermaid\ngantt\naxisFormat %b %d\nBuild :a, 2026-09-09, 2d\nShip :milestone, after a, 0d\n",
+        "```mermaid\ngantt\naxisFormat %b %d\nexcludes weekends\nBuild :a, 2026-09-11, 2d\nShip :milestone, after a, 0d\n",
     ] {
         let mut controller =
             StreamController::new(/*width*/ Some(80), &cwd, HistoryRenderMode::Rich);

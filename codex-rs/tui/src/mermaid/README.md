@@ -40,8 +40,11 @@ integer second/minute/hour/day/week durations, sequential task starts, `after`
 dependencies, `until` end references, task statuses, and milestones. A task with
 multiple prerequisites starts at their latest end. Milestones appear at the
 midpoint of their declared interval. Missing dependencies and cycles retain the
-source. Excluded dates, custom input date formats, and calendar-month durations
-are not supported.
+source. `excludes weekends` follows Mermaid's Saturday/Sunday scheduling rules:
+dependency endpoints advance across excluded days, while bars omit trailing
+excluded days. Explicit starts and fixed end dates stay as declared. Other
+exclusions, custom input date formats, and calendar-month durations are not
+supported.
 
 This is a terminal-oriented subset of Mermaid. Supported diagram families are
 flowcharts, sequence diagrams, state diagrams, class diagrams, ER diagrams, and

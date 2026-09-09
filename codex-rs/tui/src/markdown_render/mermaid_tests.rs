@@ -83,7 +83,7 @@ fn mermaid_unclosed_or_unsupported_source_keeps_code_display() {
         "stateDiagram-v2\nstate Outer {\n[*] --> Inner\n}\n[*] --> Outer\n```\n",
         "gantt\nA :a, after b, 1d\nB :b, after a, 1d\n```\n",
         "gantt\nA :a, after missing, 1d\n```\n",
-        "gantt\nexcludes weekends\nA :2026-09-09, 1d\n```\n",
+        "gantt\nexcludes holidays\nA :2026-09-09, 1d\n```\n",
     ];
     for body in cases {
         assert_eq!(
@@ -159,5 +159,74 @@ fn mermaid_gantt_release_schedule_renders_timeline() {
     let source = "```mermaid\ngantt\ntitle Example release schedule\ndateFormat YYYY-MM-DD\naxisFormat %b %d\nsection Design\nRequirements :a1, 2026-09-09, 2d\nMockups :a2, after a1, 3d\nsection Development\nAPI :b1, after a1, 5d\nInterface :b2, after a2, 4d\nsection Release\nIntegration testing :c1, after b1 b2, 2d\nLaunch :milestone, after c1, 0d\n```\n";
     let output = render(source, 100);
     assert!(!output.contains("dateFormat"), "Gantt stayed raw: {output}");
+    assert_snapshot!(output);
+}
+
+#[test]
+fn mermaid_gantt_product_launch_excluding_weekends_renders_timeline() {
+    let source = "```mermaid
+gantt
+    title Product launch – September to October 2026
+    dateFormat YYYY-MM-DD
+    axisFormat %b %d
+    excludes weekends
+    todayMarker off
+
+    section Planning
+    Project kickoff :milestone, done, kickoff, 2026-09-07, 0d
+    Requirements :done, req, 2026-09-07, 3d
+    Technical architecture :done, arch, after req, 3d
+    Scope approved :done, milestone, scope, after arch, 0d
+
+    section Design
+    User flows :done, flows, after req, 3d
+    Visual design :active, visual, after flows, 5d
+    Interactive prototype :proto, after visual, 3d
+    Usability testing :ux, after proto, 3d
+    Design approved :milestone, design, after ux, 0d
+
+    section Backend
+    Database schema :done, schema, after arch, 2d
+    Authentication :active, auth, after schema, 4d
+    Core API :crit, api, after schema, 7d
+    Background jobs :jobs, after api, 4d
+    API integration tests :crit, api_tests, after auth api jobs, 3d
+
+    section Frontend
+    App shell and navigation :active, shell, after flows, 4d
+    Shared components :components, after visual shell, 4d
+    Main user flows :crit, frontend, after components api, 6d
+    Accessibility review :a11y, after frontend, 3d
+    UI refinements :polish, after a11y design, 3d
+
+    section Infrastructure
+    CI pipeline :done, ci, after arch, 2d
+    Staging environment :staging, after ci, 3d
+    Monitoring and alerts :monitor, after staging, 3d
+    Production setup :prod, after monitor, 4d
+
+    section Quality assurance
+    End-to-end testing :crit, e2e, after api_tests polish staging, 5d
+    Security review :security, after api_tests, 4d
+    Performance testing :perf, after api_tests staging, 3d
+    Fixes and regression :crit, fixes, after e2e security perf, 4d
+    Release candidate :milestone, rc, after fixes, 0d
+
+    section Launch
+    Documentation :docs, after design, 6d
+    Support training :training, after docs frontend, 3d
+    Go / no-go review :crit, review, after rc prod training, 1d
+    Public launch :milestone, launch, after review, 0d
+    Launch monitoring :crit, watch, after launch, 3d
+    Retrospective :retro, after watch, 1d
+```
+";
+    let output = render(source, 100);
+    assert!(
+        !output.contains("excludes weekends"),
+        "Gantt stayed raw: {output}"
+    );
+    assert_eq!(output.matches('◆').count(), 5);
+    assert!(output.contains("Retrospective"));
     assert_snapshot!(output);
 }

@@ -1,0 +1,16 @@
+---
+source: tui/src/mermaid/gantt_tests.rs
+expression: "render(source,\n80).expect(\"rendered weekends\").iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\")"
+---
+                     Sep 11                                               Sep 22
+                     ├─────────────────────────────────────────────────────────┤
+Friday             │ ━━━━━
+Dependent          │                ━━━━━━
+Saturday           │      ━━━━━
+Explicit end       │ ━━━━━━━━━━
+Zero milestone     │      ◆
+Midpoint milestone │           ◆
+Until              │ ━━━━━━━━━━━━━━━━━━━━━
+Target             │           │
+Week               │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Subday             │ ━━

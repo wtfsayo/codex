@@ -1,0 +1,48 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+expression: output
+---
+Product launch – September to October 2026
+                                    Sep 07                                                    Nov 03
+                                    ├──────────────────────────────────────────────────────────────┤
+Planning
+Project kickoff [done]            │ ◆
+Requirements [done]               │ ━━━
+Technical architecture [done]     │    ━━━━━
+Scope approved [done]             │         ◆
+Design
+User flows [done]                 │    ━━━━━
+Visual design [active]            │         ━━━━━━━━
+Interactive prototype             │                 ━━━
+Usability testing                 │                    ━━━━━━
+Design approved                   │                          ◆
+Backend
+Database schema [done]            │         ━━━
+Authentication [active]           │            ━━━━━━
+Core API [crit]                   │            ━━━━━━━━━━
+Background jobs                   │                        ━━━━
+API integration tests [crit]      │                            ━━━━━━
+Frontend
+App shell and navigation [active] │         ━━━━━
+Shared components                 │                 ━━━━━
+Main user flows [crit]            │                        ━━━━━━━━━
+Accessibility review              │                                 ━━━
+UI refinements                    │                                    ━━━━━
+Infrastructure
+CI pipeline [done]                │         ━━━
+Staging environment               │            ━━━━━
+Monitoring and alerts             │                 ━━━
+Production setup                  │                    ━━━━━━━
+Quality assurance
+End-to-end testing [crit]         │                                         ━━━━━━━━
+Security review                   │                                  ━━━━━━
+Performance testing               │                                  ━━━
+Fixes and regression [crit]       │                                                 ━━━━━━━
+Release candidate                 │                                                        ◆
+Launch
+Documentation                     │                          ━━━━━━━━━
+Support training                  │                                   ━━━━━
+Go / no-go review [crit]          │                                                        ━
+Public launch                     │                                                         ◆
+Launch monitoring [crit]          │                                                         ━━━
+Retrospective                     │                                                              ━━

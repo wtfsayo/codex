@@ -1,6 +1,8 @@
+use chrono::Datelike;
 use chrono::Duration;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
+use chrono::Weekday;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
@@ -20,6 +22,7 @@ struct Task<'a> {
 struct Chart<'a> {
     title: Option<&'a str>,
     axis_format: &'a str,
+    exclude_weekends: bool,
     tasks: Vec<Task<'a>>,
 }
 
@@ -27,6 +30,7 @@ struct Chart<'a> {
 struct Schedule {
     start: NaiveDateTime,
     end: NaiveDateTime,
+    render_end: NaiveDateTime,
 }
 
 impl<'a> Chart<'a> {
@@ -41,6 +45,7 @@ impl<'a> Chart<'a> {
         let mut chart = Self {
             title: None,
             axis_format: "%Y-%m-%d",
+            exclude_weekends: false,
             tasks: Vec::new(),
         };
         let mut section = "";
@@ -50,6 +55,9 @@ impl<'a> Chart<'a> {
                 Some(("title", value)) if !value.is_empty() => chart.title = Some(value),
                 Some(("section", value)) if !value.is_empty() => section = value,
                 Some(("dateFormat", "YYYY-MM-DD")) => {}
+                Some(("excludes", value)) if value.eq_ignore_ascii_case("weekends") => {
+                    chart.exclude_weekends = true;
+                }
                 Some(("axisFormat", value)) if !value.is_empty() => {
                     // Accept only specifiers with identical date semantics in D3 and chrono.
                     let mut chars = value.chars();
@@ -162,13 +170,14 @@ impl<'a> Chart<'a> {
             Some(start) => parse_date(start)?,
             None => self.resolve(index.checked_sub(1)?, resolved, visiting)?.end,
         };
-        let end = if let Some(id) = task.end.strip_prefix("until ") {
+        let explicit_end = parse_date(task.end);
+        let mut end = if let Some(id) = task.end.strip_prefix("until ") {
             let dependency = self
                 .tasks
                 .iter()
                 .position(|task| task.id == Some(id.trim()))?;
             self.resolve(dependency, resolved, visiting)?.start
-        } else if let Some(date) = parse_date(task.end) {
+        } else if let Some(date) = explicit_end {
             date
         } else {
             let (number, unit) = task
@@ -188,7 +197,32 @@ impl<'a> Chart<'a> {
         if end < start {
             return None;
         }
-        let schedule = Schedule { start, end };
+        let mut render_end = end;
+        if self.exclude_weekends && explicit_end.is_none() {
+            // Mermaid scans start + 1 through end inclusively. Dependency endpoints
+            // skip trailing weekends, while visible bars retain their last work end.
+            // Explicit end dates bypass this adjustment; starts never move.
+            let day = Duration::days(1);
+            let mut cursor = start.checked_add_signed(day)?;
+            let mut previous_excluded = false;
+            let mut remaining_days = 36_525usize;
+            while cursor <= end {
+                remaining_days = remaining_days.checked_sub(1)?;
+                if !previous_excluded {
+                    render_end = end;
+                }
+                previous_excluded = matches!(cursor.weekday(), Weekday::Sat | Weekday::Sun);
+                if previous_excluded {
+                    end = end.checked_add_signed(day)?;
+                }
+                cursor = cursor.checked_add_signed(day)?;
+            }
+        }
+        let schedule = Schedule {
+            start,
+            end,
+            render_end,
+        };
         resolved[index] = Some(schedule);
         visiting[index] = false;
         Some(schedule)
@@ -263,7 +297,7 @@ pub(super) fn render(source: &str, width: usize) -> Option<Vec<Line<'static>>> {
         }
         let mut bar = vec![' '; columns];
         let start = position(dates.start);
-        let end = position(dates.end);
+        let end = position(dates.render_end);
         if task.milestone {
             let middle = dates.start + (dates.end - dates.start) / 2;
             bar[position(middle)] = '◆';
