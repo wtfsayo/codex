@@ -29,16 +29,27 @@ Codex modifications:
   suffixes; class namespaces; and malformed sequence participant/note scopes.
 - Preserve source for composite or concurrent state regions and state notes,
   whose scopes and content the native renderer cannot represent.
-- Preserve source for edges crossing a subgraph boundary to a member node.
-  Explicit edges between peer group IDs and edges wholly inside a group render.
+- Route grouped connections to their original node or group endpoints, including
+  nested subgraphs. Group projections determine placement only. Connections avoid
+  node boxes and labels and cross only the endpoint groups' ancestor frames.
 - Replace image-viewer guidance with terminal-width guidance.
 - Add regression coverage for strict parsing and the adapter's fallback outcome.
 
+The separate Gantt renderer supports sections, ISO dates, explicit end dates,
+integer second/minute/hour/day/week durations, sequential task starts, `after`
+dependencies, `until` end references, task statuses, and milestones. A task with
+multiple prerequisites starts at their latest end. Milestones appear at the
+midpoint of their declared interval. Missing dependencies and cycles retain the
+source. Excluded dates, custom input date formats, and calendar-month durations
+are not supported.
+
 This is a terminal-oriented subset of Mermaid. Supported diagram families are
-flowcharts, sequence diagrams, state diagrams, class diagrams, and ER diagrams.
+flowcharts, sequence diagrams, state diagrams, class diagrams, ER diagrams, and
+Gantt charts.
 Styling directives and interactive links are not applied. Composite and concurrent
-state diagrams and state notes use source fallback, as do edges that cross a
-subgraph boundary to a member node. Sequence activation bars are not drawn.
+state diagrams and state notes use source fallback. Sequence activation bars are
+not drawn. Grouped routing has a bounded search budget and preserves the source
+if a connection or its label cannot fit without overwriting nodes or arrowheads.
 Labels wrap within bounded boxes and may be shortened with an ellipsis. Layout
 has node, edge, group, and canvas limits; the parent adapter bounds source size
 and preserves the original Markdown when a diagram cannot be displayed.

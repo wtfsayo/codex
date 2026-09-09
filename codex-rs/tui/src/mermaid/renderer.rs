@@ -9,6 +9,8 @@
 //! Renders `graph`/`flowchart`, `sequenceDiagram`, and `stateDiagram` blocks as Unicode box-drawing art.
 //! Unsupported diagram types fall back to the raw source in a framed box.
 
+mod grouped;
+
 use std::collections::HashMap;
 
 use ratatui::style::Modifier;
@@ -273,22 +275,6 @@ fn parse_graph(src: &str) -> Option<Graph> {
     }
 
     if graph.nodes.is_empty() || !stack.is_empty() {
-        return None;
-    }
-    // Group layout can connect peers, but cannot route through a frame to a named child.
-    // Keep the source when projecting that endpoint onto its frame would change the graph.
-    let scope = |node: usize| {
-        graph
-            .groups
-            .iter()
-            .find_map(|group| (graph.index.get(&group.id) == Some(&node)).then_some(group.parent))
-            .unwrap_or(graph.node_group[node])
-    };
-    if graph
-        .edges
-        .iter()
-        .any(|edge| scope(edge.from) != scope(edge.to))
-    {
         return None;
     }
     Some(graph)
@@ -1750,6 +1736,7 @@ fn flip_glyph_h(c: char) -> char {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Placed {
     x: usize,
     y: usize,
@@ -1800,6 +1787,21 @@ fn layout_canvas(
     extras: &[NodeExtra],
     max_width: Option<usize>,
 ) -> Result<Canvas, Oversize> {
+    layout_canvas_placed(graph, extras, max_width, EdgeRendering::Render).map(|(canvas, _)| canvas)
+}
+
+#[derive(PartialEq)]
+enum EdgeRendering {
+    Render,
+    LayoutOnly,
+}
+
+fn layout_canvas_placed(
+    graph: &Graph,
+    extras: &[NodeExtra],
+    max_width: Option<usize>,
+    edge_rendering: EdgeRendering,
+) -> Result<(Canvas, Vec<Placed>), Oversize> {
     let n = graph.nodes.len();
     if n == 0 {
         return Err(Oversize::Cells);
@@ -1943,6 +1945,10 @@ fn layout_canvas(
             ),
         }
     }
+    if edge_rendering == EdgeRendering::LayoutOnly {
+        canvas.finalize_mask();
+        return Ok((canvas, placed));
+    }
     for (i, edge) in graph.edges.iter().enumerate() {
         canvas.cur_style = match edge.line {
             LineKind::Solid => STY_SOLID,
@@ -1966,7 +1972,7 @@ fn layout_canvas(
     }
 
     canvas.finalize_mask();
-    Ok(canvas)
+    Ok((canvas, placed))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -2048,7 +2054,7 @@ fn render_grouped(
         keep[gi] = has_nodes || has_children || referenced[gi];
     }
 
-    let mut canvas = build_scope(graph, None, &scope_edges, &direct_nodes, &keep, max_width)?;
+    let mut canvas = grouped::render(graph, &scope_edges, &direct_nodes, &keep, &proxy, max_width)?;
     match graph.dir {
         Dir::Up => canvas.flip_vertical(),
         Dir::Left => canvas.flip_horizontal(),
@@ -2060,82 +2066,6 @@ fn render_grouped(
         styled_lines,
         plain_lines,
     })
-}
-
-fn build_scope(
-    graph: &Graph,
-    scope: Option<usize>,
-    scope_edges: &HashMap<Option<usize>, Vec<(Item, Item, usize)>>,
-    direct_nodes: &HashMap<Option<usize>, Vec<usize>>,
-    keep: &[bool],
-    max_width: Option<usize>,
-) -> Result<Canvas, Oversize> {
-    let mut items: Vec<Item> = Vec::new();
-    if let Some(nodes) = direct_nodes.get(&scope) {
-        items.extend(nodes.iter().map(|&n| Item::Node(n)));
-    }
-    let child_groups: Vec<usize> = (0..graph.groups.len())
-        .filter(|&gi| graph.groups[gi].parent == scope && keep[gi])
-        .collect();
-    items.extend(child_groups.iter().map(|&gi| Item::Group(gi)));
-
-    if items.is_empty() {
-        return Ok(Canvas::new(1, 1));
-    }
-
-    let mut index_of: HashMap<Item, usize> = HashMap::new();
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut extras: Vec<NodeExtra> = Vec::new();
-    for item in &items {
-        index_of.insert(*item, nodes.len());
-        match item {
-            Item::Node(ni) => {
-                nodes.push(Node {
-                    label: graph.nodes[*ni].label.clone(),
-                    shape: graph.nodes[*ni].shape,
-                });
-                extras.push(NodeExtra::Plain);
-            }
-            Item::Group(gi) => {
-                let sub = build_scope(graph, Some(*gi), scope_edges, direct_nodes, keep, None)?;
-                nodes.push(Node {
-                    label: graph.groups[*gi].label.clone(),
-                    shape: Shape::Rect,
-                });
-                extras.push(NodeExtra::Frame(sub));
-            }
-        }
-    }
-
-    let mut edges: Vec<Edge> = Vec::new();
-    if let Some(list) = scope_edges.get(&scope) {
-        for (f, t, ei) in list {
-            let (Some(&fi), Some(&ti)) = (index_of.get(f), index_of.get(t)) else {
-                continue;
-            };
-            let e = &graph.edges[*ei];
-            edges.push(Edge {
-                from: fi,
-                to: ti,
-                label: e.label.clone(),
-                head_to: e.head_to,
-                head_from: e.head_from,
-                line: e.line,
-            });
-        }
-    }
-
-    let synth = Graph {
-        nodes,
-        edges,
-        index: HashMap::new(),
-        groups: Vec::new(),
-        node_group: Vec::new(),
-        cur_group: None,
-        over_cap: false,
-        dir: graph.dir,
-    };
-    layout_canvas(&synth, &extras, max_width)
 }
 
 fn draw_class_box(canvas: &mut Canvas, p: &Placed, sections: &[Vec<String>]) {
@@ -4704,15 +4634,10 @@ mod tests {
     }
 
     #[test]
-    fn subgraph_cross_member_edges_preserve_original_endpoints_in_source() {
+    fn subgraph_ambiguous_redeclarations_preserve_source() {
         for source in [
-            "graph LR\n subgraph g[Workers]\n A --> B\n end\n S --> A",
-            "graph LR\n subgraph g[Workers]\n A --> B\n end\n B --> T",
             "graph LR\n S --> A\n subgraph g[Workers]\n A --> B\n end\n B --> T",
-            "graph TD\n subgraph outer[Outer]\n subgraph inner[Inner]\n X --> Y\n end\n W --> X\n end",
-            "graph LR\n subgraph one\n A\n end\n subgraph two\n B\n end\n A --> B",
             "flowchart LR\n X --> A\n subgraph G\n A\n B\n end",
-            "flowchart LR\n subgraph G\n A\n B\n end\n X --> A",
             "flowchart LR\n subgraph one\n A\n end\n subgraph two\n A\n B\n end",
         ] {
             let art = render(source, &styles(), None).unwrap();

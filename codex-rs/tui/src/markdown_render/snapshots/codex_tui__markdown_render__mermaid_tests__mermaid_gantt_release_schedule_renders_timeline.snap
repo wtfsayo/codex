@@ -1,0 +1,16 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+expression: output
+---
+Example release schedule
+                      Sep 09                                                                  Sep 20
+                      ├────────────────────────────────────────────────────────────────────────────┤
+Design
+Requirements        │ ━━━━━━━━━━━━━━
+Mockups             │               ━━━━━━━━━━━━━━━━━━━━━
+Development
+API                 │               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Interface           │                                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Release
+Integration testing │                                                                ━━━━━━━━━━━━━━
+Launch              │                                                                              ◆

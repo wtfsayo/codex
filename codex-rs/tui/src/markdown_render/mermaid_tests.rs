@@ -80,8 +80,10 @@ fn mermaid_unclosed_or_unsupported_source_keeps_code_display() {
         "flowchart LR\nA --> B unsupported syntax\n```\n",
         "flowchart LR\nsubgraph Group\nA --> B\n```\n",
         "flowchart LR\nsubgraph Group\ndirection BT\nA --> B\nend\n```\n",
-        "flowchart LR\nsubgraph Group\nA\nB\nend\nX --> A\n```\n",
         "stateDiagram-v2\nstate Outer {\n[*] --> Inner\n}\n[*] --> Outer\n```\n",
+        "gantt\nA :a, after b, 1d\nB :b, after a, 1d\n```\n",
+        "gantt\nA :a, after missing, 1d\n```\n",
+        "gantt\nexcludes weekends\nA :2026-09-09, 1d\n```\n",
     ];
     for body in cases {
         assert_eq!(
@@ -118,6 +120,7 @@ fn mermaid_limits_fall_back_without_losing_source() {
         (many_nodes.as_str(), 80),
         ("flowchart LR\nA[Build] --> B[Test]\n", 1),
         ("flowchart LR\nA[\u{1b}[31m] --> B\n", 80),
+        ("gantt\nBuild :2026-09-09, 2d\n", 10),
     ] {
         assert_eq!(
             render(&format!("```mermaid\n{body}```\n"), width),
@@ -130,4 +133,31 @@ fn mermaid_limits_fall_back_without_losing_source() {
 fn mermaid_unicode_multiline_labels_and_surrounding_markdown() {
     let source = "Before.\n\n```mermaid\nflowchart TD\nA[\"入口<br/>Request\"] -->|\"next\"| B[\"Reply &amp; done\"]\n```\n\nAfter **diagram**.\n";
     assert_snapshot!(render(source, 80));
+}
+
+#[test]
+fn mermaid_grouped_architecture_renders_child_connections() {
+    let source = "```mermaid\nflowchart LR\nsubgraph Clients\nWeb[Web app]\nMobile[Mobile app]\nend\nsubgraph Backend\nAPI[API server]\nQueue[Job queue]\nWorker[Worker]\nend\nsubgraph Storage\nDB[(Database)]\nFiles[(File storage)]\nend\nWeb --> API\nMobile --> API\nAPI --> DB\nAPI --> Queue\nQueue --> Worker\nWorker --> DB\nWorker --> Files\n```\n";
+    let output = render(source, 160);
+    assert!(
+        !output.contains("flowchart LR"),
+        "architecture stayed raw: {output}"
+    );
+    assert_eq!(
+        output
+            .chars()
+            .filter(|c| matches!(c, '▶' | '◄' | '▲' | '▼'))
+            .count(),
+        7,
+        "every connection needs its own arrowhead",
+    );
+    assert_snapshot!(output);
+}
+
+#[test]
+fn mermaid_gantt_release_schedule_renders_timeline() {
+    let source = "```mermaid\ngantt\ntitle Example release schedule\ndateFormat YYYY-MM-DD\naxisFormat %b %d\nsection Design\nRequirements :a1, 2026-09-09, 2d\nMockups :a2, after a1, 3d\nsection Development\nAPI :b1, after a1, 5d\nInterface :b2, after a2, 4d\nsection Release\nIntegration testing :c1, after b1 b2, 2d\nLaunch :milestone, after c1, 0d\n```\n";
+    let output = render(source, 100);
+    assert!(!output.contains("dateFormat"), "Gantt stayed raw: {output}");
+    assert_snapshot!(output);
 }

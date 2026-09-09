@@ -25,6 +25,8 @@ fn mermaid_stream_keeps_source_mutable_through_close_and_following_prose() {
         "Before.\n\n- ````mermaid\n  graph TD\n  A[Input] --> B[Output]\n  ````\n\nAfter.\n",
         "Before.\n\n1. Diagram\n\n   ```mermaid\n   graph TD\n   A[Input] --> B[Output]\n   ```\n\nAfter.\n",
         "Before.\n\n````markdown\n```mermaid\ngraph TD\nA[Input] --> B[Output]\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n````\n\nAfter.\n",
+        "Before.\n\n```mermaid\nflowchart LR\nsubgraph Clients\nA[Input]\nend\nsubgraph Backend\nB[Output]\nend\nA --> B\n```\n\nAfter.\n",
+        "Before.\n\n```mermaid\ngantt\naxisFormat %b %d\nBuild :a, 2026-09-09, 2d\nShip :milestone, after a, 0d\n```\n\nAfter.\n",
     ] {
         let mut controller =
             StreamController::new(/*width*/ Some(80), &cwd, HistoryRenderMode::Rich);
@@ -83,44 +85,49 @@ fn mermaid_stream_keeps_source_mutable_through_close_and_following_prose() {
 #[test]
 fn mermaid_stream_resize_and_raw_toggle_preserve_diagram_and_original_source() {
     let cwd = std::env::temp_dir();
-    let mut controller =
-        StreamController::new(/*width*/ Some(80), &cwd, HistoryRenderMode::Rich);
-    let mut emitted = Vec::new();
-    let open = "```mermaid\ngraph LR\nA[Incoming message] --> B[Gateway]\n";
-    controller.push(open);
-    drain(&mut controller, &mut emitted);
-    assert_eq!(emitted, Vec::<String>::new());
-    controller.set_render_mode(HistoryRenderMode::Raw);
-    drain(&mut controller, &mut emitted);
-    assert_eq!(emitted, Vec::<String>::new());
-    assert_eq!(
-        plain_lines(&controller.current_tail_lines()),
-        open.lines().map(str::to_owned).collect::<Vec<_>>(),
-    );
-    controller.push("```\n");
-    let source = format!("{open}```\n");
-    for width in [30, 120] {
-        controller.set_width(Some(width));
-        for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
-            controller.set_render_mode(mode);
-            drain(&mut controller, &mut emitted);
-            assert_eq!(emitted, Vec::<String>::new());
-            assert_eq!(
-                controller.current_tail_lines(),
-                render_source(
-                    &source,
-                    Some(width),
-                    &cwd,
-                    mode,
-                    /*inline_visualization_context*/ None,
-                ),
-            );
+    for open in [
+        "```mermaid\ngraph LR\nA[Incoming message] --> B[Gateway]\n",
+        "```mermaid\nflowchart LR\nsubgraph Clients\nA[Input]\nend\nsubgraph Backend\nB[Output]\nend\nA --> B\n",
+        "```mermaid\ngantt\naxisFormat %b %d\nBuild :a, 2026-09-09, 2d\nShip :milestone, after a, 0d\n",
+    ] {
+        let mut controller =
+            StreamController::new(/*width*/ Some(80), &cwd, HistoryRenderMode::Rich);
+        let mut emitted = Vec::new();
+        controller.push(open);
+        drain(&mut controller, &mut emitted);
+        assert_eq!(emitted, Vec::<String>::new());
+        controller.set_render_mode(HistoryRenderMode::Raw);
+        drain(&mut controller, &mut emitted);
+        assert_eq!(emitted, Vec::<String>::new());
+        assert_eq!(
+            plain_lines(&controller.current_tail_lines()),
+            open.lines().map(str::to_owned).collect::<Vec<_>>(),
+        );
+        controller.push("```\n");
+        let source = format!("{open}```\n");
+        for width in [30, 120] {
+            controller.set_width(Some(width));
+            for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
+                controller.set_render_mode(mode);
+                drain(&mut controller, &mut emitted);
+                assert_eq!(emitted, Vec::<String>::new());
+                assert_eq!(
+                    controller.current_tail_lines(),
+                    render_source(
+                        &source,
+                        Some(width),
+                        &cwd,
+                        mode,
+                        /*inline_visualization_context*/ None,
+                    ),
+                );
+            }
         }
+        controller.set_render_mode(HistoryRenderMode::Rich);
+        let (cell, original) = controller.finalize();
+        assert!(cell.is_some());
+        assert_eq!(original, Some(source));
     }
-    controller.set_render_mode(HistoryRenderMode::Rich);
-    let (cell, original) = controller.finalize();
-    assert!(cell.is_some());
-    assert_eq!(original, Some(source));
 }
 
 #[test]
