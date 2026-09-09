@@ -1,0 +1,10 @@
+---
+source: tui/src/mermaid/gantt_tests.rs
+expression: "output.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\")"
+---
+                       09-09                               09-15
+                       ├───────────────────────────────────────┤
+Release
+設計 [done]          │ ━━━━━━━━━━━━━
+Build [active, crit] │              ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Midpoint             │                     ◆
